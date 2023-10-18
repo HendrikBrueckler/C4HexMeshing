@@ -1,3 +1,3 @@
-# Collapsing Cuboidal Cell Complexes for Hexahedral Meshing
+# Collapsing Cuboidal Cell Complexes for Hex Meshing
 
 #### Under Construction...
