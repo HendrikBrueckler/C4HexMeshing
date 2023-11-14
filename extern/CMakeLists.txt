@@ -1,0 +1,15 @@
+find_package(Git QUIET)
+
+if(GIT_FOUND AND EXISTS "${CMAKE_SOURCE_DIR}/.git")
+    git_update_submodules("${CMAKE_CURRENT_SOURCE_DIR}")
+else()
+    message(WARNING "C4Hex_SUBMODULES_MANUAL is off, but this is not a git repository")
+endif()
+
+if(NOT EXISTS "${PROJECT_SOURCE_DIR}/extern/MC3D/CMakeLists.txt")
+    if (${C4Hex_STANDALONE})
+        message(FATAL_ERROR "The submodules were not downloaded! Please update submodules and try again.")
+    else()
+        message(WARNING "C4Hex submodules not downloaded! Must supply them in a base project.")
+    endif()
+endif()

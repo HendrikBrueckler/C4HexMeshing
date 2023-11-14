@@ -1,0 +1,6 @@
+[submodule "extern/QGP3D"]
+	path = extern/QGP3D
+	url = git@github.com:HendrikBrueckler/QGP3D.git
+[submodule "extern/LBFGSpp"]
+	path = extern/LBFGSpp
+	url = https://github.com/yixuan/LBFGSpp.git
