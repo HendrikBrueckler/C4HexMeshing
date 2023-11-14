@@ -7,8 +7,9 @@
 If you make use of `C4HexMeshing` in your scientific work, please cite our paper. For your convenience,
 you can use the following bibtex snippet:
 
+```bibtex
     @article{C4HexMeshing,
-        author     = {Hendrik Br{\"{u}}ckler andand
+        author     = {Hendrik Br{\"{u}}ckler and
                      Marcel Campen},
         title      = {Collapsing Embedded Cell Collapses for Safer Hexahedral Meshing},
         journal    = {ACM Trans. Graph.},
@@ -16,6 +17,7 @@ you can use the following bibtex snippet:
         number     = {6},
         year       = {2023},
     }
+```
 
 ***
 
