@@ -1,8 +1,8 @@
-![teaser](TODO)
+![teaser](https://github.com/HendrikBrueckler/C4HexMeshing/assets/38473042/f70ef0d1-e1f4-4e35-a024-ad9440baf83c)
 
 # Collapsing Cubical Cell Complexes for Hex Meshing
 
-`C4HexMeshing` is an implementation of [Collapsing Embedded Cell Collapses for Safer Hexahedral Meshing \[Brückler et al. 2023\]](TODO) (SIGGRAPH Asia 2023) distributed under GPLv3.
+`C4HexMeshing` is an implementation of [Collapsing Embedded Cell Collapses for Safer Hexahedral Meshing \[Brückler et al. 2023\]](http://graphics.cs.uos.de/papers/T-Collapsing_Bru%CC%88ckler_SA2023_Preprint.pdf) (SIGGRAPH Asia 2023) distributed under GPLv3.
 
 If you make use of `C4HexMeshing` in your scientific work, please cite our paper. For your convenience,
 you can use the following bibtex snippet:
@@ -26,9 +26,9 @@ you can use the following bibtex snippet:
 To extract from this complex a valid integer-grid map and thus a hex mesh, all edges, patches and blocks of the complex which were quantized to zero extent are collapsed and their content redistributed among the remaining elements. On the remaining cell complex, whose cells are now blocks of strictly positive integer extents, an integer-grid map can be computed blockwise via (relatively simple) cube maps.
 From this a hex mesh can be extracted.
 
-Note, that (currently) no geometric optimization other than tentative untangling is performed, but some might be added in the future.
+Note, that (currently) no geometric optimization other than tentative untangling of the integer-grid map is performed, but some might be added in the future.
 
-![Collapses](TODO)
+![Collapses](https://github.com/HendrikBrueckler/C4HexMeshing/assets/38473042/4fbb3c16-1baf-47e7-9d6b-58b7fc8555b3)
 
 ***
 
@@ -56,7 +56,7 @@ For full information on its usage, execute
 
     c4hex_cli --help
 
-Example input can be found in folder ```extern/MC3D/tests/resources```.
+Example input can be found in folder ```extern/QGP3D/extern/MC3D/tests/resources```.
 
 ### API
 For details on the API of the library, check the headers in ```include```, they are thoroughly documented. Apart from that, ```cli/main.cpp``` demonstrates usage of the entire pipeline for both simple and advanced usage.
