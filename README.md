@@ -51,7 +51,7 @@ In root directory
 
 ### Usage
 An example command-line application is included that reads a tetrahedral mesh including a seamless parametrization from a file in .hexex-format, as used and documented in [libHexEx](https://www.graphics.rwth-aachen.de/software/libHexEx/).
-It outputs can generate the output of several stages of the algorithm, including the original MC, collapsed MC, integer-grid map (unoptimized) and hex mesh (unoptimized).
+It can generate the output of several stages of the algorithm, including the original MC, collapsed MC, integer-grid map (unoptimized) and hex mesh (unoptimized).
 
 After building, the CLI app can be found in ```build/Build/bin/cli``` .
 For full information on its usage, execute
