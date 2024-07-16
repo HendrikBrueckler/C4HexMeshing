@@ -1,5 +1,5 @@
 /.vscode
-/build
+/build*
 /build_rel
 /build_dbg
 /Debug

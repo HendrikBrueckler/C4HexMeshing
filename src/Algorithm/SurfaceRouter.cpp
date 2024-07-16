@@ -2,7 +2,7 @@
 
 #include <fstream>
 
-#include <gurobi_c++.h>
+#include <ClpSimplex.hpp>
 
 namespace c4hex
 {
@@ -84,16 +84,12 @@ SurfaceRouter::RetCode SurfaceRouter::calcMinimalSurfaceByLP(set<CH>& space,
 
         try
         {
-            GRBEnv env = GRBEnv(true);
-            env.set(GRB_IntParam_Threads, 2);
-            env.set(GRB_IntParam_LogToConsole, false);
-            env.set(GRB_DoubleParam_TimeLimit, 5 * 60);
-            env.start();
+            ClpSimplex model;
+            model.setLogLevel(0);
+            model.setMaximumSeconds(300);
 
-            GRBModel model = GRBModel(env);
-
-            // Gather set of faces and edges
-            map<HFH, GRBVar> hf2var;
+            // Create variables
+            map<HFH, int> hf2var;
             set<EH> edges;
             set<FH> faces;
             for (CH tet : confined ? confinedVolume : space)
@@ -108,13 +104,16 @@ SurfaceRouter::RetCode SurfaceRouter::calcMinimalSurfaceByLP(set<CH>& space,
                         {
                             for (EH e : tetMesh.halfface_edges(hf))
                                 edges.insert(e);
-                            hf2var[hf] = model.addVar(
-                                0.0, 1.0, 0., GRB_CONTINUOUS, std::string("Halfface") + std::to_string(hf.idx()));
+                            hf2var[hf] = hf2var.size();
                         }
                 }
+            model.resize(0, hf2var.size());
+            for (int i = 0; i < (int)hf2var.size(); i++)
+            {
+                model.setColumnLower(i, 0.0);
+                model.setColumnUpper(i, 1.0);
+            }
 
-            // Formulate objective: min z * Area(z)^T
-            GRBQuadExpr objective = 0.;
             for (auto& kv : hf2var)
             {
                 HFH hf = kv.first;
@@ -136,17 +135,16 @@ SurfaceRouter::RetCode SurfaceRouter::calcMinimalSurfaceByLP(set<CH>& space,
                 double area = ((pos[2] - pos[0]) % (pos[1] - pos[0])).length();
                 area = std::max(area, 1e-6 * (1 + (double)rand() / RAND_MAX));
 
-                objective += area * kv.second;
+                model.setObjectiveCoefficient(kv.second, area);
             }
-
-            model.setObjective(objective, GRB_MINIMIZE);
 
             // Formulate constraints B * z = r
             // Formulate manifoldness constraints
             for (EH e : edges)
             {
+                vector<int> vars;
+                vector<double> coeffs;
                 HEH he = tetMesh.halfedge_handle(e, 0);
-                GRBLinExpr Bzi = 0;
                 for (FH f : tetMesh.edge_faces(e))
                 {
                     for (HFH hf : tetMesh.face_halffaces(f))
@@ -158,18 +156,15 @@ SurfaceRouter::RetCode SurfaceRouter::calcMinimalSurfaceByLP(set<CH>& space,
                         for (HEH heOther : tetMesh.halfface_halfedges(hf))
                             if (he == heOther)
                                 coherent = true;
-                        Bzi += coherent ? it->second : -it->second;
+                        vars.push_back(it->second);
+                        coeffs.push_back(coherent ? 1 : -1);
                     }
                 }
 
-                GRBLinExpr ri = 0;
+                double rhs = 0;
                 if (boundaryEs.count(e) != 0)
-                {
-                    ri = boundaryHes.count(he) == 0 ? -1 : 1;
-                }
-
-                std::string constraintName = "Edge" + std::to_string(e.idx());
-                model.addConstr(Bzi, GRB_EQUAL, ri, constraintName);
+                    rhs = boundaryHes.count(he) == 0 ? -1.0 : 1.0;
+                model.addRow(vars.size(), vars.data(), coeffs.data(), rhs, rhs);
             }
 
             bool nonManifoldSolution = true;
@@ -188,11 +183,11 @@ SurfaceRouter::RetCode SurfaceRouter::calcMinimalSurfaceByLP(set<CH>& space,
                     else
                         return NO_CONVERGENCE;
                 }
-                DLOG(INFO) << "Gurobi solving surface minimization...";
-                model.optimize();
+                DLOG(INFO) << "Clp solving surface minimization...";
+                model.primal();
+                int status = model.status();
 
-                int status = model.get(GRB_IntAttr_Status);
-                if (status != 2 && status != 9)
+                if (status != 0)
                 {
                     if (!surfaceNew.empty())
                     {
@@ -245,26 +240,32 @@ SurfaceRouter::RetCode SurfaceRouter::calcMinimalSurfaceByLP(set<CH>& space,
                             break; // next iteration -> non-confined
                         else
                         {
-                            DLOG(ERROR) << "Bad status return by GUROBI solver";
+                            DLOG(ERROR) << "Bad status return by Clp solver";
                             return NO_CONVERGENCE;
                         }
                     }
                 }
-                auto obj = model.getObjective();
-                DLOG(INFO) << "Solved with final surface area " << obj.getValue();
+                double obj = model.objectiveValue();
+                DLOG(INFO) << "Solved with final surface area " << obj;
+
+                double* sol = model.primalColumnSolution();
 
                 bool nonIntegerSolution
                     = containsMatching(hf2var,
-                                       [&](const pair<const HFH, GRBVar>& kv)
+                                       [&](const pair<const HFH, int>& kv)
                                        {
-                                           double val = kv.second.get(GRB_DoubleAttr_X);
+                                           double val = sol[kv.second];
                                            if (std::abs(val - std::round(val)) > 1e-3)
                                            {
                                                DLOG(WARNING)
                                                    << "Non integer solution " << val << " on hf " << kv.first
                                                    << ", can not solve by continuous LP, adding constraint to force 0";
                                                std::string constraintName = "NonIntF" + std::to_string(kv.first.idx());
-                                               model.addConstr(kv.second, GRB_EQUAL, 0, constraintName);
+
+                                               int var = kv.second;
+                                               double coeff = 1.0;
+                                               double rhs = 0.0;
+                                               model.addRow(1, &var, &coeff, rhs, rhs);
                                                return true;
                                            }
                                            return false;
@@ -274,7 +275,7 @@ SurfaceRouter::RetCode SurfaceRouter::calcMinimalSurfaceByLP(set<CH>& space,
 
                 surfaceNew.clear();
                 for (auto kv : hf2var)
-                    if ((int)std::round(kv.second.get(GRB_DoubleAttr_X)) == 1)
+                    if ((int)std::round(sol[kv.second]) == 1)
                         surfaceNew.insert(kv.first);
 
                 complexEs.clear();
@@ -297,26 +298,27 @@ SurfaceRouter::RetCode SurfaceRouter::calcMinimalSurfaceByLP(set<CH>& space,
                             complexEs.insert(kv.first);
                             nonManifoldSolution = true;
 
-                            GRBLinExpr sum = 0;
+                            vector<int> vars;
+                            vector<double> coeffs;
+
                             for (HFH hf : kv.second)
                             {
                                 auto var = hf2var.at(hf);
-                                sum += var;
+                                vars.push_back(var);
+                                coeffs.push_back(1.0);
                             }
 
                             if (boundaryEs.count(kv.first) == 0)
                             {
                                 DLOG(INFO) << "Adding constraint over " << kv.second.size()
                                            << " halffaces, that sum must be less/equal than 2";
-                                std::string constraintName = "ComplexE" + std::to_string(kv.first.idx());
-                                model.addConstr(sum, GRB_LESS_EQUAL, 2, constraintName);
+                                model.addRow(vars.size(), vars.data(), coeffs.data(), -DBL_MAX, 2.0);
                             }
                             else
                             {
                                 DLOG(INFO) << "Adding constraint over " << kv.second.size()
                                            << " halffaces, that sum must be less/equal than 1";
-                                std::string constraintName = "ComplexBoundaryE" + std::to_string(kv.first.idx());
-                                model.addConstr(sum, GRB_LESS_EQUAL, 1, constraintName);
+                                model.addRow(vars.size(), vars.data(), coeffs.data(), -DBL_MAX, 1.0);
                             }
                         }
                     if (nonManifoldSolution)
@@ -372,18 +374,20 @@ SurfaceRouter::RetCode SurfaceRouter::calcMinimalSurfaceByLP(set<CH>& space,
                             complexVs.insert(v);
                             nonManifoldSolution = true;
 
-                            GRBLinExpr sum = 0;
+                            vector<int> vars;
+                            vector<double> coeffs;
+
                             for (HFH hf : kv.second)
                             {
                                 auto var = hf2var.at(hf);
-                                sum += var;
+                                vars.push_back(var);
+                                coeffs.push_back(1.0);
                             }
 
                             DLOG(INFO) << "Adding constraint over " << kv.second.size()
                                        << " halffaces, that sum must be less/equal than "
                                        << (double)((int)kv.second.size() - 1);
-                            std::string constraintName = "ComplexV" + std::to_string(v.idx());
-                            model.addConstr(sum, GRB_LESS_EQUAL, (double)((int)kv.second.size() - 1), constraintName);
+                            model.addRow(vars.size(), vars.data(), coeffs.data(), -DBL_MAX, (double)((int)kv.second.size() - 1));
                         }
                     }
                     if (nonManifoldSolution)
@@ -480,10 +484,9 @@ SurfaceRouter::RetCode SurfaceRouter::calcMinimalSurfaceByLP(set<CH>& space,
             if (!nonManifoldSolution)
                 return SUCCESS;
         }
-        catch (GRBException e)
+        catch (...)
         {
-            DLOG(ERROR) << "Gurobi exception, errcode: " << e.getErrorCode();
-            DLOG(ERROR) << "Gurobi error message: " << e.getMessage();
+            LOG(ERROR) << "Clp exception";
             if (confined)
                 continue; // next iteration -> non-confined
             return NO_CONVERGENCE;

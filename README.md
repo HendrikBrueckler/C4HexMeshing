@@ -36,7 +36,7 @@ Note, that (currently) no geometric optimization other than tentative untangling
 
 ### Dependencies
 - GMP (NOT included, must be installed on your system)
-- GUROBI (NOT included, must be installed on your system)
+- Clp (NOT included, must be installed on your system)
 - NLOPT (optional, for map optimization, NOT included, must be installed on your system)
 - [MC3D](https://github.com/HendrikBrueckler/MC3D) (Included as submodule, together with all subdependencies)
 - [QGP3D](https://github.com/HendrikBrueckler/QGP3D) (Included as submodule, together with all subdependencies)

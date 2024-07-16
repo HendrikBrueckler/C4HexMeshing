@@ -10,7 +10,8 @@
 
 #include <QGP3D/ConstraintExtractor.hpp>
 #include <QGP3D/ConstraintWriter.hpp>
-#include <QGP3D/MCQuantizer.hpp>
+#include <QGP3D/ISP/ISPQuantizer.hpp>
+#include <QGP3D/SeparationChecker.hpp>
 
 #include <C4Hex/Algorithm/MCCollapser.hpp>
 #include <C4Hex/Interface/HexRemesher.hpp>
@@ -236,13 +237,21 @@ int main(int argc, char** argv)
         ASSERT_SUCCESS("Writing walls", Writer(meshProps, wallsFile, exactOutput).writeSeamlessParamAndWalls());
     }
 
+    SeparationChecker sep(meshProps);
+    ISPQuantizer quantizer(meshProps, sep);
+    double lowerBound = -DBL_MAX;
+    if (doCollapse)
+        lowerBound = 0;
+    else if (constraintFile.empty())
+        lowerBound = 1;
+
     double newScaling = scaling;
     int minimalHexes = 1;
     if (!constraintFile.empty() || doCollapse || !outputIGMFile.empty() || !outputHexFile.empty())
     {
         {
-            ASSERT_SUCCESS("Quantization", MCQuantizer(meshProps).quantizeArcLengths(0.0001, true, false));
-            minimalHexes = MCQuantizer(meshProps).numHexesInQuantization();
+            ASSERT_SUCCESS("Quantization", quantizer.quantize(0.0001, lowerBound));
+            minimalHexes = sep.numHexesInQuantization();
             vector<double> aLengths;
             for (auto a : mcMeshRaw.edges())
                 aLengths.emplace_back(meshProps.get<MC_MESH_PROPS>()->get<ARC_DBL_LENGTH>(a));
@@ -253,10 +262,7 @@ int main(int argc, char** argv)
             LOG(INFO) << "To keep " << scaling * 100 << "% of arcs above length 0.5, a scaling factor of " << newScaling
                       << " for collapsing was chosen";
         }
-        ASSERT_SUCCESS("Quantization",
-                       MCQuantizer(meshProps).quantizeArcLengths(newScaling,
-                                                                 !constraintFile.empty() || doCollapse,
-                                                                 doCollapse ? false : !constraintFile.empty()));
+        ASSERT_SUCCESS("Quantization", quantizer.quantize(newScaling, lowerBound));
         if (doCollapse && !MCCollapser(meshProps).hasZeroLengthArcs())
         {
             LOG(INFO) << "No 0-arcs, nothing to collapse, exiting...";
@@ -282,8 +288,7 @@ int main(int argc, char** argv)
                 paramVol += mcgen.rationalVolumeUVW(tet);
             double optimalScaling = std::pow(timesMinimalHexes * minimalHexes / paramVol.get_d(), 1.0 / 3);
 
-            ASSERT_SUCCESS("Quantization block structured",
-                           MCQuantizer(meshProps).quantizeArcLengths(optimalScaling, false));
+            ASSERT_SUCCESS("Quantization block structured", quantizer.quantize(optimalScaling, 1.0));
         }
     }
     else if (!constraintFile.empty())
@@ -310,7 +315,7 @@ int main(int argc, char** argv)
 
         if (!outputHexFile.empty())
         {
-            int nHexes = MCQuantizer(meshProps).numHexesInQuantization();
+            int nHexes = sep.numHexesInQuantization();
             int nsub = 0;
             if (nHexes > 100000)
                 nsub = 2;

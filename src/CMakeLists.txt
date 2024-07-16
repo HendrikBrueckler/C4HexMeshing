@@ -9,10 +9,9 @@ if (NOT TARGET QGP3D::QGP3D)
 endif()
 list(APPEND C4Hex_LIB_LIST QGP3D::QGP3D)
 
-#gurobi #TODO free software alternative at some point
-find_package(Gurobi REQUIRED)
-list(APPEND C4Hex_LIB_LIST_PRV Gurobi::GurobiC)
-list(APPEND C4Hex_LIB_LIST_PRV Gurobi::GurobiCXX)
+# Clp
+find_package(CLP REQUIRED)
+list(APPEND C4Hex_LIB_LIST_PRV ${CLP_LIBRARIES})
 
 # nlopt
 find_package(NLOPT)
@@ -85,6 +84,11 @@ target_include_directories(C4Hex
                            PUBLIC
                            "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
                            "$<INSTALL_INTERFACE:${C4Hex_INSTALL_INCLUDE_DIR}>")
+
+target_include_directories(C4Hex SYSTEM
+                           PRIVATE
+                           "$<BUILD_INTERFACE:${CLP_INCLUDE_DIRS}>")
+
 if (NLOPT_FOUND)
   target_include_directories(C4Hex
                              PUBLIC

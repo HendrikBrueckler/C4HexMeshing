@@ -6,7 +6,7 @@ else()
     message(WARNING "C4Hex_SUBMODULES_MANUAL is off, but this is not a git repository")
 endif()
 
-if(NOT EXISTS "${PROJECT_SOURCE_DIR}/extern/MC3D/CMakeLists.txt")
+if(NOT EXISTS "${PROJECT_SOURCE_DIR}/extern/QGP3D/CMakeLists.txt")
     if (${C4Hex_STANDALONE})
         message(FATAL_ERROR "The submodules were not downloaded! Please update submodules and try again.")
     else()
