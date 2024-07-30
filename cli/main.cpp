@@ -106,7 +106,7 @@ int main(int argc, char** argv)
         "--output-hex-file", outputHexFile, "Specify a file to generate a hex mesh from the IGM into (optional)");
     app.add_option("--scaling", scaling, "Set this double to affect relative quantization scaling");
     app.add_option(
-        "--untangling-iter", untanglingIter, "Number of IGM foldover-removal untangling iterations (default 10)");
+        "--untangling-iter", untanglingIter, "Number of IGM foldover-removal untangling iterations (default 500)");
     app.add_flag("--block-structured",
                  blockStructured,
                  "Whether to collapse first and then requantize to an estimated reasonable amount of hexes");
@@ -237,8 +237,6 @@ int main(int argc, char** argv)
         ASSERT_SUCCESS("Writing walls", Writer(meshProps, wallsFile, exactOutput).writeSeamlessParamAndWalls());
     }
 
-    SeparationChecker sep(meshProps);
-    ISPQuantizer quantizer(meshProps, sep);
     double lowerBound = -DBL_MAX;
     if (doCollapse)
         lowerBound = 0;
@@ -250,7 +248,8 @@ int main(int argc, char** argv)
     if (!constraintFile.empty() || doCollapse || !outputIGMFile.empty() || !outputHexFile.empty())
     {
         {
-            ASSERT_SUCCESS("Quantization", quantizer.quantize(0.0001, lowerBound));
+            SeparationChecker sep(meshProps);
+            ASSERT_SUCCESS("Quantization", ISPQuantizer(meshProps, sep).quantize(0.0001, lowerBound));
             minimalHexes = sep.numHexesInQuantization();
             vector<double> aLengths;
             for (auto a : mcMeshRaw.edges())
@@ -262,7 +261,8 @@ int main(int argc, char** argv)
             LOG(INFO) << "To keep " << scaling * 100 << "% of arcs above length 0.5, a scaling factor of " << newScaling
                       << " for collapsing was chosen";
         }
-        ASSERT_SUCCESS("Quantization", quantizer.quantize(newScaling, lowerBound));
+        SeparationChecker sep(meshProps);
+        ASSERT_SUCCESS("Quantization", ISPQuantizer(meshProps, sep).quantize(newScaling, lowerBound));
         if (doCollapse && !MCCollapser(meshProps).hasZeroLengthArcs())
         {
             LOG(INFO) << "No 0-arcs, nothing to collapse, exiting...";
@@ -288,7 +288,8 @@ int main(int argc, char** argv)
                 paramVol += mcgen.rationalVolumeUVW(tet);
             double optimalScaling = std::pow(timesMinimalHexes * minimalHexes / paramVol.get_d(), 1.0 / 3);
 
-            ASSERT_SUCCESS("Quantization block structured", quantizer.quantize(optimalScaling, 1.0));
+            SeparationChecker sep(meshProps);
+            ASSERT_SUCCESS("Quantization block structured", ISPQuantizer(meshProps, sep).quantize(optimalScaling, 1.0));
         }
     }
     else if (!constraintFile.empty())
@@ -315,7 +316,7 @@ int main(int argc, char** argv)
 
         if (!outputHexFile.empty())
         {
-            int nHexes = sep.numHexesInQuantization();
+            int nHexes = SeparationChecker(meshProps).numHexesInQuantization();
             int nsub = 0;
             if (nHexes > 100000)
                 nsub = 2;

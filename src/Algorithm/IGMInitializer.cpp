@@ -4,7 +4,7 @@
 #include <Eigen/Sparse>
 #include <Eigen/SparseCholesky>
 
-#define UNIFORM_SPACING
+// #define UNIFORM_SPACING
 
 namespace c4hex
 {
