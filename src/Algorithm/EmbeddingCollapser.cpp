@@ -35,6 +35,8 @@ void EmbeddingCollapser::setVars(const HEH& ha)
     _a2pToAppend.clear();
     _haCollapse = ha;
     _aToAppend = determineLastSuccessorArc();
+    if (_aToAppend.is_valid() && mcMeshProps().mesh().valence(_aToAppend) == 1)
+        throw std::logic_error("Currently can't handle appending valence 1 arcs");
     _collapseHes = mcMeshProps().haHalfedges(_haCollapse);
 }
 
@@ -157,7 +159,7 @@ EmbeddingCollapser::collapsePillowBlockEmbedding(const CH& b, const HFH& hpMovin
             }
         }
     }
-    mcMeshProps().set<PATCH_MESH_HALFFACES>(p2, newPatchHalffaces);
+    mcMeshProps().ref<PATCH_MESH_HALFFACES>(p2).clear();
     mcMeshProps().setHpTransition<PATCH_TRANSITION>(
         hpStationary, transFromTo.invert().chain(mcMeshProps().hpTransition<PATCH_TRANSITION>(hpStationary)));
 
@@ -247,6 +249,7 @@ void EmbeddingCollapser::nodeShift(const HEH& he)
     EH a = meshProps().get<MC_ARC>(e0);
     meshProps().reset<MC_ARC>(e0);
     meshProps().reset<IS_ARC>(e0);
+    meshProps().reset<IS_SINGULAR>(e0);
     auto& aHes = mcMeshProps().ref<ARC_MESH_HALFEDGES>(a);
     if (aHes.front() == he)
         aHes.pop_front();
@@ -338,8 +341,9 @@ bool EmbeddingCollapser::reconnectNextArcToNodeThroughPatch()
         EH a = meshProps().get<MC_ARC>(tetMesh.edge_handle(heArc));
         vector<HFH>& triangleFan = sector.second;
 
-        // Only reroute boundary arcs within boundary
-        if ((tetMesh.is_boundary(heArc) && !tetMesh.is_boundary(fPatch)))
+        bool inCritical = containsMatching(mcMesh.edge_faces(a),
+                                           [this](const FH& p) { return mcMeshProps().get<IS_CRITICAL_P>(p); });
+        if (inCritical && !mcMeshProps().get<IS_CRITICAL_P>(meshProps().get<MC_PATCH>(fPatch)))
             continue;
 
         // Only reroute feature-patch-arcs within feature-patch
@@ -386,15 +390,14 @@ bool EmbeddingCollapser::reconnectNextArcToNodeThroughBlock()
             if (heArc != he0 && !tetMesh.is_boundary(heArc) && meshProps().isInArc(heArc)
                 && containsSomeOf(tetMesh.halfedge_cells(heArc), domeTets))
             {
-                // Dont reroute feature-arc
+                // Dont reroute critical arc
                 EH a = meshProps().get<MC_ARC>(tetMesh.edge_handle(heArc));
-                if (mcMeshProps().isAllocated<IS_FEATURE_E>() && mcMeshProps().get<IS_FEATURE_E>(a))
+                if (mcMeshProps().get<IS_CRITICAL_A>(a))
                     continue;
 
-                // Dont reroute feature-patch-arc through block
-                if (mcMeshProps().isAllocated<IS_FEATURE_F>()
-                    && containsMatching(mcMesh.edge_faces(a),
-                                        [this](const FH& p) { return mcMeshProps().get<IS_FEATURE_F>(p); }))
+                // Dont reroute critical-patch-arc through block
+                if (containsMatching(mcMesh.edge_faces(a),
+                                     [this](const FH& p) { return mcMeshProps().get<IS_CRITICAL_P>(p); }))
                     continue;
 
                 // Special handling of last successor
@@ -440,18 +443,17 @@ bool EmbeddingCollapser::isShiftableDome(const DomeElements& domeElems) const
     }
     if (ps.size() > 1)
         return false;
-    if (ps.size() == 1 && (mcMeshProps().isAllocated<IS_FEATURE_F>() && mcMeshProps().get<IS_FEATURE_F>(*ps.begin())))
+    if (ps.size() == 1 && mcMeshProps().get<IS_CRITICAL_P>(*ps.begin()))
         return false;
 
     // CeilingBorderOrdered may be empty if dome is not manifold (i.e. invalid)
     if (domeElems.ceilingBorderOrdered.empty())
         return false;
 
-    if (containsMatching(domeElems.floorInnerEdges,
-                         [&, this](const EH& e) {
-                             return (currentlyCollapsingPatch() || tetMesh.edge_handle(_heCurrent) != e)
-                                    && meshProps().isInArc(e);
-                         }))
+    if (containsMatching(
+            domeElems.floorInnerEdges,
+            [&, this](const EH& e)
+            { return (currentlyCollapsingPatch() || tetMesh.edge_handle(_heCurrent) != e) && meshProps().isInArc(e); }))
         return false;
 
     return true;
@@ -571,6 +573,7 @@ void EmbeddingCollapser::arcShift(const HEH& heArc, vector<HFH>& triangleFan)
             if (meshProps().isInArc(e))
             {
                 meshProps().reset<IS_ARC>(e);
+                meshProps().reset<IS_SINGULAR>(e);
                 meshProps().reset<MC_ARC>(e);
                 if (revert)
                     aHes.erase(
@@ -581,6 +584,7 @@ void EmbeddingCollapser::arcShift(const HEH& heArc, vector<HFH>& triangleFan)
             else
             {
                 meshProps().set<IS_ARC>(e, true);
+                meshProps().set<IS_SINGULAR>(e, mcMeshProps().get<IS_SINGULAR>(aReroute));
                 meshProps().set<MC_ARC>(e, aReroute);
                 if (revert)
                     aHes.push_front(he);
@@ -612,6 +616,18 @@ void EmbeddingCollapser::reconnectPatchesToArc(const HEH& he, const EH& a, const
     auto& tetMesh = meshProps().mesh();
     VH vCenter = currentlyCollapsingPatch() ? _vPullUp : tetMesh.from_vertex_handle(_heCurrent);
     FH fFlip = tetMesh.face_handle(hfFlip);
+
+    if (mcMeshProps().mesh().valence(a) == 1)
+    {
+        FH p = meshProps().get<MC_PATCH>(fFlip);
+        auto& pHfs = mcMeshProps().ref<PATCH_MESH_HALFFACES>(p);
+        bool revert = pHfs.count(hfFlip) == 0;
+        pHfs.erase(revert ? tetMesh.opposite_halfface_handle(hfFlip) : hfFlip);
+        meshProps().reset<IS_WALL>(fFlip);
+        meshProps().reset<MC_PATCH>(fFlip);
+        meshProps().reset<TRANSITION>(fFlip);
+        return;
+    }
 
     FH fJoin;
     // choose a patch to take up previous patch space (if one exists)
@@ -688,7 +704,7 @@ void EmbeddingCollapser::reconnectPatchesToArc(const HEH& he, const EH& a, const
             auto& hfsPropeller = *it;
             HFH hfPatch = hfsPropeller.front();
             FH p = meshProps().get<MC_PATCH>(tetMesh.face_handle(hfPatch));
-            if (mcMeshProps().isAllocated<IS_FEATURE_F>() && mcMeshProps().get<IS_FEATURE_F>(p))
+            if (mcMeshProps().get<IS_CRITICAL_P>(p))
             {
                 assert(false);
                 throw std::logic_error("Error, have to move feature patch");
@@ -826,6 +842,7 @@ void EmbeddingCollapser::appendHalfedge(const HEH& he)
     else
         aHes.push_back(he0);
     meshProps().set<IS_ARC>(e0, true);
+    meshProps().set<IS_SINGULAR>(e0, mcMeshProps().get<IS_SINGULAR>(a));
     meshProps().set<MC_ARC>(e0, a);
 }
 
@@ -1091,30 +1108,29 @@ FH EmbeddingCollapser::determineLastSuccessorPatch(const FH& pFirst, const EH& a
     auto& mcMesh = mcMeshProps().mesh();
     if (!pFirst.is_valid())
         return FH();
-    if (mcMesh.is_boundary(pFirst))
+    if (mcMeshProps().get<IS_CRITICAL_P>(pFirst))
         return findMatching(mcMesh.edge_faces(aShift),
-                            [&](const FH& p) { return p != pFirst && mcMesh.is_boundary(p); });
-    else if (mcMeshProps().isAllocated<IS_FEATURE_F>() && mcMeshProps().get<IS_FEATURE_F>(pFirst))
-        return findMatching(mcMesh.edge_faces(aShift),
-                            [&, this](const FH& p) { return p != pFirst && mcMeshProps().get<IS_FEATURE_F>(p); });
+                            [&, this](const FH& p) { return p != pFirst && mcMeshProps().get<IS_CRITICAL_P>(p); });
     else
     {
         auto b2trans = determineTransitionsAroundArc(aShift, *mcMesh.ec_iter(aShift), Transition());
         HFH hpNonBoundary = mcMesh.halfface_handle(pFirst, 0);
         if (mcMesh.is_boundary(hpNonBoundary))
             hpNonBoundary = mcMesh.opposite_halfface_handle(hpNonBoundary);
-        UVWDir hpFirstNormal
-            = b2trans.at(mcMesh.incident_cell(hpNonBoundary)).invert().rotate(halfpatchNormalDir(hpNonBoundary));
+        UVWDir hpFirstNormal = b2trans.at(mcMesh.incident_cell(hpNonBoundary))
+                                   .front()
+                                   .invert()
+                                   .rotate(halfpatchNormalDir(hpNonBoundary));
         for (FH p : mcMesh.edge_faces(aShift))
         {
             if (p == pFirst || mcMesh.is_boundary(p) != mcMesh.is_boundary(pFirst)
-                || (mcMeshProps().isAllocated<IS_FEATURE_F>()
-                    && !mcMeshProps().get<IS_FEATURE_F>(pFirst) != !mcMeshProps().get<IS_FEATURE_F>(p)))
+                || (mcMeshProps().isAllocated<IS_CRITICAL_P>()
+                    && !mcMeshProps().get<IS_CRITICAL_P>(pFirst) != !mcMeshProps().get<IS_CRITICAL_P>(p)))
                 continue;
             HFH hp = mcMesh.halfface_handle(p, 0);
             if (mcMesh.is_boundary(hp))
                 hp = mcMesh.opposite_halfface_handle(hp);
-            UVWDir normalHp = b2trans.at(mcMesh.incident_cell(hp)).invert().rotate(halfpatchNormalDir(hp));
+            UVWDir normalHp = b2trans.at(mcMesh.incident_cell(hp)).front().invert().rotate(halfpatchNormalDir(hp));
             if (((normalHp | -normalHp) & hpFirstNormal) != UVWDir::NONE)
                 return p;
         }
@@ -1122,9 +1138,9 @@ FH EmbeddingCollapser::determineLastSuccessorPatch(const FH& pFirst, const EH& a
                             [&, this](const FH& p)
                             {
                                 return p != pFirst && mcMesh.is_boundary(p) == mcMesh.is_boundary(pFirst)
-                                       && (!mcMeshProps().isAllocated<IS_FEATURE_F>()
-                                           || !mcMeshProps().get<IS_FEATURE_F>(pFirst)
-                                                  == !mcMeshProps().get<IS_FEATURE_F>(p));
+                                       && (!mcMeshProps().isAllocated<IS_CRITICAL_P>()
+                                           || !mcMeshProps().get<IS_CRITICAL_P>(pFirst)
+                                                  == !mcMeshProps().get<IS_CRITICAL_P>(p));
                             });
     }
     return FH();
@@ -1133,43 +1149,41 @@ FH EmbeddingCollapser::determineLastSuccessorPatch(const FH& pFirst, const EH& a
 EH EmbeddingCollapser::determineLastSuccessorArc() const
 {
     auto& mcMesh = mcMeshProps().mesh();
-    if (mcMeshProps().get<IS_SINGULAR>(mcMesh.edge_handle(_haCollapse)))
+    if (mcMeshProps().get<IS_CRITICAL_A>(mcMesh.edge_handle(_haCollapse)))
         return findMatching(mcMesh.vertex_edges(mcMesh.from_vertex_handle(_haCollapse)),
                             [&, this](const EH& a)
-                            { return a != mcMesh.edge_handle(_haCollapse) && mcMeshProps().get<IS_SINGULAR>(a); });
-    else if (mcMeshProps().isAllocated<IS_FEATURE_E>()
-             && mcMeshProps().get<IS_FEATURE_E>(mcMesh.edge_handle(_haCollapse)))
-        return findMatching(mcMesh.vertex_edges(mcMesh.from_vertex_handle(_haCollapse)),
-                            [&, this](const EH& a)
-                            { return a != mcMesh.edge_handle(_haCollapse) && mcMeshProps().get<IS_FEATURE_E>(a); });
+                            { return a != mcMesh.edge_handle(_haCollapse) && mcMeshProps().get<IS_CRITICAL_A>(a); });
     else
     {
-        bool collapseInFeature = mcMeshProps().isAllocated<IS_FEATURE_F>()
-                                 && containsMatching(mcMesh.halfedge_faces(_haCollapse),
-                                                     [&](const FH& p) { return mcMeshProps().get<IS_FEATURE_F>(p); });
+        bool valenceCantBeOne = true;
+        {
+            bool collapseInCritical = containsMatching(
+                mcMesh.halfedge_faces(_haCollapse), [&](const FH& p) { return mcMeshProps().get<IS_CRITICAL_P>(p); });
 
-        CH bRef = *mcMesh.hec_iter(_haCollapse);
-        // Choose a well aligned boundary arc
-        auto b2trans = determineTransitionsAroundNode(mcMesh.from_vertex_handle(_haCollapse), bRef, Transition());
-        UVWDir dirHa = halfarcDirInBlock(_haCollapse, bRef);
+            CH bRef = *mcMesh.hec_iter(_haCollapse);
+            // Choose a well aligned boundary arc
+            auto b2trans = determineTransitionsAroundNode(mcMesh.from_vertex_handle(_haCollapse), bRef, Transition());
+            UVWDir dirHa = halfarcDirInBlock(_haCollapse, bRef);
 
-        for (bool aligned : {true, false})
-            for (HEH ha : mcMesh.incoming_halfedges(mcMesh.from_vertex_handle(_haCollapse)))
-                if (ha != mcMesh.opposite_halfedge_handle(_haCollapse)
-                    && (mcMesh.is_boundary(_haCollapse) == mcMesh.is_boundary(ha))
-                    && (!mcMeshProps().isAllocated<IS_FEATURE_E>()
-                        || (!mcMeshProps().get<IS_FEATURE_E>(mcMesh.edge_handle(_haCollapse))
-                            == !mcMeshProps().get<IS_FEATURE_E>(mcMesh.edge_handle(ha))))
-                    && (!aligned
-                        || dirHa
-                               == b2trans.at(*mcMesh.hec_iter(ha))
-                                      .invert()
-                                      .rotate(halfarcDirInBlock(ha, *mcMesh.hec_iter(ha))))
-                    && collapseInFeature
-                           == (mcMeshProps().isAllocated<IS_FEATURE_F>()
-                               && containsMatching(mcMesh.halfedge_faces(ha),
-                                                   [&](const FH& p) { return mcMeshProps().get<IS_FEATURE_F>(p); })))
-                    return mcMesh.edge_handle(ha);
+            for (bool aligned : {true, false})
+                for (HEH ha : mcMesh.incoming_halfedges(mcMesh.from_vertex_handle(_haCollapse)))
+                    if (ha != mcMesh.opposite_halfedge_handle(_haCollapse)
+                        && (mcMesh.is_boundary(_haCollapse) == mcMesh.is_boundary(ha))
+                        && (!valenceCantBeOne || mcMesh.valence(mcMesh.edge_handle(ha)) > 1)
+                        && (!mcMeshProps().isAllocated<IS_CRITICAL_A>()
+                            || (!mcMeshProps().get<IS_CRITICAL_A>(mcMesh.edge_handle(_haCollapse))
+                                == !mcMeshProps().get<IS_CRITICAL_A>(mcMesh.edge_handle(ha))))
+                        && (!aligned
+                            || dirHa
+                                   == b2trans.at(*mcMesh.hec_iter(ha))
+                                          .front()
+                                          .invert()
+                                          .rotate(halfarcDirInBlock(ha, *mcMesh.hec_iter(ha))))
+                        && collapseInCritical
+                               == (containsMatching(mcMesh.halfedge_faces(ha),
+                                                    [&](const FH& p) { return mcMeshProps().get<IS_CRITICAL_P>(p); })))
+                        return mcMesh.edge_handle(ha);
+        }
     }
     return EH();
 }
@@ -1217,6 +1231,7 @@ EmbeddingCollapser::RetCode EmbeddingCollapser::collapseFaceByFace()
     auto& tetMesh = meshProps().mesh();
 
     EH aReroute = mcMesh.edge_handle(_haReroute);
+
     HFH hpCollapse = mcMesh.halfface_handle(_pCollapse, 0);
     if ((_haReroute.idx() % 2) != 0)
     {
@@ -1228,6 +1243,27 @@ EmbeddingCollapser::RetCode EmbeddingCollapser::collapseFaceByFace()
     set<HFH> hfsCollapse = mcMeshProps().hpHalffaces(hpCollapse);
 
     auto& aHes = mcMeshProps().ref<ARC_MESH_HALFEDGES>(aReroute);
+    bool trivial = mcMesh.valence(aReroute) == 1;
+    if (trivial)
+    {
+        for (HEH he : aHes)
+        {
+            EH e = tetMesh.edge_handle(he);
+            meshProps().reset<IS_ARC>(e);
+            meshProps().reset<IS_SINGULAR>(e);
+            meshProps().reset<MC_ARC>(e);
+        }
+        aHes.clear();
+        auto& pHfs = mcMeshProps().ref<PATCH_MESH_HALFFACES>(_pCollapse);
+        for (HFH hf : pHfs)
+        {
+            FH f = tetMesh.face_handle(hf);
+            meshProps().reset<IS_WALL>(f);
+            meshProps().reset<MC_PATCH>(f);
+        }
+        pHfs.clear();
+        return SUCCESS;
+    }
 
     set<HEH> hesCurve;
     set<HEH> hesLimit;
@@ -1240,9 +1276,10 @@ EmbeddingCollapser::RetCode EmbeddingCollapser::collapseFaceByFace()
                 hfsBoundary.insert(hf);
     }
 
-    // TODO Bad fix/workaround for MCMesh connectivity breaking for some extreme selfadjacency
+    // TODO Bad fix/workaround for MCMesh connectivity kernel breaking for some extreme selfadjacency
     if (hfsBoundary.empty())
     {
+        LOG(WARNING) << "Possibly fragile workaround";
         hpCollapse = mcMesh.opposite_halfface_handle(hpCollapse);
         hfsCollapse = mcMeshProps().hpHalffaces(hpCollapse);
         for (HEH he : aHes)
@@ -1290,6 +1327,7 @@ EmbeddingCollapser::RetCode EmbeddingCollapser::collapseFaceByFace()
             }
             continue;
         }
+
         skippedFull = false;
 
         it = hfs.erase(it);
@@ -1326,6 +1364,7 @@ EmbeddingCollapser::RetCode EmbeddingCollapser::collapseFaceByFace()
             if (hesCurve.count(he) != 0)
             {
                 meshProps().reset<IS_ARC>(e);
+                meshProps().reset<IS_SINGULAR>(e);
                 meshProps().reset<MC_ARC>(e);
                 itHes = aHes.erase(itHes);
                 hesCurve.erase(he);
@@ -1333,7 +1372,6 @@ EmbeddingCollapser::RetCode EmbeddingCollapser::collapseFaceByFace()
             else
             {
                 HEH heOpp = tetMesh.opposite_halfedge_handle(he);
-                itHes = aHes.insert(itHes, heOpp);
                 hesCurve.insert(heOpp);
                 HFH hfNewBoundary = findMatching(
                     tetMesh.halfedge_halffaces(heOpp),
@@ -1346,8 +1384,17 @@ EmbeddingCollapser::RetCode EmbeddingCollapser::collapseFaceByFace()
                 }
                 if (hesLimit.count(heOpp) == 0)
                 {
+                    assert(!meshProps().isInArc(e));
                     meshProps().set<IS_ARC>(e, true);
+                    meshProps().set<IS_SINGULAR>(e, mcMeshProps().get<IS_SINGULAR>(aReroute));
                     meshProps().set<MC_ARC>(e, aReroute);
+                    itHes = aHes.insert(itHes, heOpp);
+                }
+                else
+                {
+                    assert(meshProps().isInArc(e));
+                    meshProps().set<IS_SINGULAR>(
+                        e, mcMeshProps().get<IS_SINGULAR>(aReroute) + meshProps().get<IS_SINGULAR>(e));
                 }
             }
         }
@@ -1430,7 +1477,8 @@ void EmbeddingCollapser::refineAndUpdateDome(set<CH>& domeTets, DomeElements& el
                 _layerTets.erase(tetMesh.incident_cell(hf));
                 domeTets.erase(tetMesh.incident_cell(hf));
                 hesOpp.push_back(findMatching(tetMesh.halfface_halfedges(hf),
-                                              [&](const HEH& he) {
+                                              [&](const HEH& he)
+                                              {
                                                   return tetMesh.from_vertex_handle(he) != vCeiling
                                                          && tetMesh.to_vertex_handle(he) != vCeiling;
                                               }));

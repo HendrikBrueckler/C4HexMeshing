@@ -25,7 +25,6 @@ class HexRemesher : public virtual MCMeshNavigator
     /**
      * @brief Create an instance that manages extraction of a hex mesh from a tet mesh equipped with MC and IGM
      *
-     * @param hexMeshProps OUT: hex mesh will be extracted here
      * @param meshProps IN: tet mesh equipped with MC and IGM
      */
     HexRemesher(const TetMeshProps& meshProps);
@@ -36,7 +35,7 @@ class HexRemesher : public virtual MCMeshNavigator
      * @param hexMeshProps OUT: hex mesh will be extracted here
      * @return RetCode SUCCESS
      */
-    RetCode extractHexMesh(HexMeshProps& hexMeshProps);
+    RetCode extractHexMesh(HexMeshProps& hexMeshProps) const;
 
     /**
      * @brief Extract the (poly)-hex mesh
@@ -44,7 +43,7 @@ class HexRemesher : public virtual MCMeshNavigator
      * @param hexMeshProps OUT: hex mesh will be extracted here
      * @return RetCode SUCCESS
      */
-    RetCode extractPolyHexMesh(PolyMeshProps& hexMeshProps, int subDiv);
+    RetCode extractPolyHexMesh(PolyMeshProps& hexMeshProps, int subDiv) const;
 
     /**
      * @brief Extract the MC mesh
@@ -52,7 +51,7 @@ class HexRemesher : public virtual MCMeshNavigator
      * @param hexMeshProps OUT: MC mesh will be extracted here
      * @return RetCode SUCCESS
      */
-    RetCode extractMCMesh(PolyMeshProps& hexMeshProps);
+    RetCode extractMCMesh(PolyMeshProps& hexMeshProps) const;
 
     /**
      * @brief Write the extracted hex mesh to \p filename
@@ -71,22 +70,20 @@ class HexRemesher : public virtual MCMeshNavigator
     RetCode writePolyHexMesh(const PolyMeshProps& hexMeshProps, const std::string& filename) const;
 
     /**
-     * @brief Smooth the surface of the hex mesh by shifting vertices towards the center of their neighbors.
-     *        Respects curvature by projecting into average plane before shift.
+     * @brief Smooth the hex mesh by shifting vertices towards the center of their neighbors.
+     *        Leaves features untouched and projects back onto boundary.
      *
      * @param iter how often each vertex should be shifted
      * @return RetCode SUCCESS
      */
-    RetCode smoothSurface(HexMeshProps& hexMeshProps, int iter);
+    RetCode smooth(HexMeshProps& hexMeshProps, int iter) const;
 
     /**
-     * @brief Smooth the surface of the hex mesh by shifting vertices towards the center of their neighbors.
-     *        Respects curvature by projecting into average plane before shift.
+     * @brief Visualize hex mesh (with GUI interaction).
      *
-     * @param iter how often each vertex should be shifted
-     * @return RetCode SUCCESS
+     * @param hexMeshProps IN: hex mesh with properties to visualize
      */
-    RetCode smoothSurface(PolyMeshProps& hexMeshProps, int iter);
+    void viewHexMesh(HexMeshProps& hexMeshProps) const;
 };
 
 } // namespace c4hex

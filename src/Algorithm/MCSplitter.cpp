@@ -2,10 +2,9 @@
 
 #include <MC3D/Mesh/MCMeshManipulator.hpp>
 
-#include <MC3D/Algorithm/MotorcycleTracer.hpp>
 #include "C4Hex/Algorithm/PathRouter.hpp"
 #include "C4Hex/Algorithm/SurfaceRouter.hpp"
-
+#include <MC3D/Algorithm/MotorcycleTracer.hpp>
 
 #include <fstream>
 
@@ -43,12 +42,10 @@ bool MCSplitter::bisectPatchAcrossDir(const FH& p, UVWDir dir, bool allowLoop, v
         return false;
 
     for (UVWDir dir2 : {dir1, -dir1})
-        if (containsMatching(side2has.at(dir2),
-                             [&](const HEH& ha)
-                             {
-                                 return mcMeshProps().isAllocated<ARC_INT_LENGTH>()
-                                        && isZeroArc(mcMesh.edge_handle(ha));
-                             }))
+        if (containsMatching(
+                side2has.at(dir2),
+                [&](const HEH& ha)
+                { return mcMeshProps().isAllocated<ARC_INT_LENGTH>() && isZeroArc(mcMesh.edge_handle(ha)); }))
         {
             DLOG(INFO) << "Can not refine patch " << p << " safely yet, has 0-arc";
             return false;
@@ -110,8 +107,6 @@ bool MCSplitter::bisectPatchAcrossDir(const FH& p, UVWDir dir, bool allowLoop, v
     // Add new face bisector arc and give it all needed properties
     EH aSplitting = mcMesh.add_edge(n1opp, n1, true);
 
-    if (mcMeshProps().isAllocated<IS_SINGULAR>())
-        mcMeshProps().set<IS_SINGULAR>(aSplitting, false);
     mcMeshProps().set<ARC_INT_LENGTH>(aSplitting, orthIntLength);
     if (mcMeshProps().isAllocated<ARC_DBL_LENGTH>())
     {
@@ -171,15 +166,20 @@ bool MCSplitter::bisectBlockOrPatch(const CH& b, vector<CH>& subBlocks)
         changing = containsMatching(nPatchesPerSide2ps,
                                     [&](const pair<const int, vector<FH>>& kv)
                                     {
-                                        return containsMatching(
-                                            kv.second,
-                                            [&](const FH& p)
-                                            {
-                                                vector<FH> trash;
-                                                return bisectPatchAcrossDir(p, UVWDir::ANY, false, trash); });
+                                        return containsMatching(kv.second,
+                                                                [&](const FH& p)
+                                                                {
+                                                                    vector<FH> trash;
+                                                                    return bisectPatchAcrossDir(
+                                                                        p, UVWDir::ANY, false, trash);
+                                                                });
                                     });
         if (changing)
+        {
+            DLOG(INFO) << "Bisected some patch on boundary of block " << b;
+            assertValidMC(false, false);
             diff = true;
+        }
     }
 
     bool boundaryFinished = !containsMatching(mcMeshProps().mesh().cell_halffaces(b),
@@ -191,7 +191,13 @@ bool MCSplitter::bisectBlockOrPatch(const CH& b, vector<CH>& subBlocks)
                                               });
 
     if (boundaryFinished)
+    {
+        DLOG(INFO) << "Boundary is completely bisected, now bisecting interior";
         diff |= bisectBlockInterior(b, subBlocks);
+        for (CH b2 : subBlocks)
+            DLOG(INFO) << "Created subblock " << b2;
+        assertValidMC(false, false);
+    }
 
     return diff;
 }
@@ -219,7 +225,7 @@ FH MCSplitter::cutBlock(const CH& b, const vector<HEH>& hasRing, vector<CH>& bsC
         {
             if (ringAs.count(mcMesh.edge_handle(ha3)) != 0)
                 continue;
-            HFH hpNext = mcMesh.adjacent_halfface_in_cell(hp, ha3);
+            HFH hpNext = safeAdjacentHalffaceInBlock(hp, ha3);
             if (!hpNext.is_valid() || sideHps.find(hpNext) != sideHps.end())
                 continue;
             hpQ.emplace_back(hpNext);
@@ -301,7 +307,7 @@ bool MCSplitter::bisectBlockInterior(const CH& b, vector<CH>& subBlocks)
                     {
                         if (asRing.count(mcMesh.edge_handle(ha3)) != 0)
                             continue;
-                        HFH hpNext = mcMesh.adjacent_halfface_in_cell(hp, ha3);
+                        HFH hpNext = safeAdjacentHalffaceInBlock(hp, ha3);
                         if (!hpNext.is_valid() || hpsVisited.find(hpNext) != hpsVisited.end())
                             continue;
                         hpQ.emplace_back(hpNext);

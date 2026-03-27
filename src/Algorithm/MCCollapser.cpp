@@ -12,12 +12,26 @@
 #include <chrono>
 #include <iostream>
 
+#ifdef MC3D_WITH_VIEWER
+#include <QGP3D/IQP/IQPQuantizer.hpp>
+#include <QGP3D/ISP/ISPQuantizer.hpp>
+#include <QGP3D/ObjectiveBuilder.hpp>
+#include <QGP3D/StructurePreserver.hpp>
+#include <misc/cpp/imgui_stdlib.h>
+#include <settings/AppState.h>
+#include <util/ImGuiUtil.h>
+#include <volumeshOS.h>
+#endif
+
 namespace c4hex
 {
+#ifdef MC3D_WITH_VIEWER
+using namespace qgp3d;
+#endif
 
-MCCollapser::MCCollapser(TetMeshProps& meshProps)
-    : TetMeshNavigator(meshProps), TetMeshManipulator(meshProps), MCMeshNavigator(meshProps),
-      MCMeshManipulator(meshProps), _refiner(meshProps)
+MCCollapser::MCCollapser(TetMeshProps& meshProps_)
+    : TetMeshNavigator(meshProps_), TetMeshManipulator(meshProps_), MCMeshNavigator(meshProps_),
+      MCMeshManipulator(meshProps_), _refiner(meshProps_)
 {
 }
 
@@ -37,28 +51,21 @@ bool MCCollapser::collapseIsLocked(const HEH& ha) const
     if (mcMesh.is_boundary(nFrom) && !mcMesh.is_boundary(ha))
         return true;
 
-    auto type = mcMeshProps().nodeType(nFrom);
-
-    if (type.first == SingularNodeType::SINGULAR)
+    if (mcMeshProps().get<IS_CRITICAL_N>(nFrom))
         return true;
 
-    if (type.first == SingularNodeType::SEMI_SINGULAR && !mcMeshProps().get<IS_SINGULAR>(mcMesh.edge_handle(ha)))
+    bool nodeInCriticalLinks = containsMatching(
+        mcMesh.vertex_edges(nFrom), [&, this](const EH& a2) { return mcMeshProps().get<IS_CRITICAL_A>(a2); });
+    EH a = mcMesh.edge_handle(ha);
+    if (nodeInCriticalLinks && !mcMeshProps().get<IS_CRITICAL_A>(a))
         return true;
 
-    if (mcMeshProps().isAllocated<IS_FEATURE_F>() && mcMeshProps().isAllocated<IS_FEATURE_E>()
-        && mcMeshProps().isAllocated<IS_FEATURE_V>())
-    {
-        if (type.second == FeatureNodeType::FEATURE || type.second == FeatureNodeType::SEMI_FEATURE_SINGULAR_BRANCH)
-            return true;
-
-        if (type.second == FeatureNodeType::SEMI_FEATURE && !mcMeshProps().get<IS_FEATURE_E>(mcMesh.edge_handle(ha)))
-            return true;
-
-        auto isFeatureP = [&](const FH& p) { return mcMeshProps().get<IS_FEATURE_F>(p); };
-        if (containsMatching(mcMesh.vertex_faces(nFrom), isFeatureP)
-            && !containsMatching(mcMesh.halfedge_faces(ha), isFeatureP))
-            return true;
-    }
+    bool nodeInCriticalRegion = containsMatching(
+        mcMesh.vertex_faces(nFrom), [&, this](const FH& p) { return mcMeshProps().get<IS_CRITICAL_P>(p); });
+    bool arcInCriticalRegion = containsMatching(mcMesh.halfedge_faces(ha),
+                                                [&, this](const FH& p) { return mcMeshProps().get<IS_CRITICAL_P>(p); });
+    if (nodeInCriticalRegion && !arcInCriticalRegion)
+        return true;
 
     if (_direction == 0 && !_randomOrder && mcMeshProps().isAllocated<BLOCK_COLLAPSE_DIR>())
     {
@@ -88,6 +95,22 @@ bool MCCollapser::collapseIsLocked(const HEH& ha) const
                             });
 }
 
+bool MCCollapser::collapseMovesSingularity(const HEH& ha) const
+{
+    auto& mcMesh = mcMeshProps().mesh();
+    VH nFrom = mcMesh.from_vertex_handle(ha);
+
+    auto type = mcMeshProps().nodeType(nFrom);
+
+    if (type.first == SingularNodeType::SINGULAR)
+        return true;
+
+    if (type.first == SingularNodeType::SEMI_SINGULAR && !mcMeshProps().get<IS_SINGULAR>(mcMesh.edge_handle(ha)))
+        return true;
+
+    return false;
+}
+
 HEH MCCollapser::preferredCollapseHalfarc(const EH& a) const
 {
     auto& mcMesh = mcMeshProps().mesh();
@@ -100,6 +123,13 @@ HEH MCCollapser::preferredCollapseHalfarc(const EH& a) const
     if (locked0)
         return ha1;
     if (locked1)
+        return ha0;
+
+    bool movesSing0 = collapseMovesSingularity(ha0);
+    bool movesSing1 = collapseMovesSingularity(ha0);
+    if (movesSing0 && !movesSing1)
+        return ha1;
+    if (movesSing1 && !movesSing0)
         return ha0;
 
     // If none is locked estimate which direction causes less work/MC distortion
@@ -127,6 +157,822 @@ HEH MCCollapser::preferredCollapseHalfarc(const EH& a) const
     }
 
     return ha0;
+}
+
+MCCollapser::RetCode MCCollapser::interactiveViewCollapse(bool optimize, bool randomOrder, int direction)
+{
+#ifndef MC3D_WITH_VIEWER
+    return collapseAllZeroElements(optimize, randomOrder, direction);
+#else
+    auto& mcMesh = mcMeshProps().mesh();
+    auto& tetMesh = meshProps().mesh();
+
+    LOG(INFO) << "Collapsing randomOrder: " << randomOrder << " and direction: " << direction;
+    _randomOrder = randomOrder;
+    _direction = direction;
+
+    MCReducer reducer(meshProps());
+    TetRemesher remesher(meshProps());
+
+    {
+        for (EH a : mcMesh.edges())
+        {
+            if (mcMeshProps().get<ARC_INT_LENGTH>(a) != 0)
+                continue;
+            _numZeroAs++;
+        }
+        for (FH p : mcMesh.faces())
+        {
+            auto hasByDir = halfpatchHalfarcsByDir(mcMesh.halfface_handle(p, 0));
+            for (auto& kv : hasByDir)
+            {
+                bool zeroSide = true;
+                for (HEH ha : kv.second)
+                {
+                    if (mcMeshProps().get<ARC_INT_LENGTH>(mcMesh.edge_handle(ha)) != 0)
+                    {
+                        zeroSide = false;
+                        break;
+                    }
+                }
+                if (zeroSide)
+                {
+                    _numZeroPs++;
+                    break;
+                }
+            }
+        }
+        for (CH b : mcMesh.cells())
+        {
+            for (UVWDir dir : {UVWDir::POS_U, UVWDir::POS_V, UVWDir::POS_W})
+            {
+                bool zeroSide = true;
+                auto dir2arcs = mcMeshProps().get<BLOCK_ALL_ARCS>(b);
+                for (auto dir2 : {dir, -dir})
+                {
+                    for (EH a : dir2arcs[dir2])
+                        if (mcMeshProps().get<ARC_INT_LENGTH>(a) != 0)
+                        {
+                            zeroSide = false;
+                            break;
+                        }
+                    if (!zeroSide)
+                        break;
+                }
+                if (zeroSide)
+                {
+                    _numZeroBs++;
+                    break;
+                }
+            }
+        }
+        LOG(INFO) << _numZeroAs << " arcs, " << _numZeroPs << " patches, " << _numZeroBs << " blocks to collapse";
+    }
+
+    assignCollapseDirs();
+
+    OVM::Vec4f color0A(0.24706, 0.58039, 0.67059, 1.0);
+    OVM::Vec4f color1A(0.58039, 0.00000, 1.00000, 1.0);
+    OVM::Vec4f color2A(0.99216, 0.14118, 0.72941, 1.0);
+    OVM::Vec4f color3A(0.99608, 0.63529, 0.00000, 1.0);
+    OVM::Vec4f color0P(0.870, 1, 0.996, 0.31);
+    OVM::Vec4f color4P(1, 0.011, 0.749, 0.74);
+    OVM::Vec4f color5P(1, 0.917, 0.376, 0.8);
+    OVM::Vec4f color6P(1, 0.917, 0.376, 0.4);
+    OVM::Vec4f colorHighlight(1.0, 0.3, 0.3, 0.5);
+    auto setZeroColors = [&, this](bool highlight = false)
+    {
+        if (meshProps().isAllocated<COLOR_F>())
+            meshProps().release<COLOR_F>();
+        if (meshProps().isAllocated<COLOR_E>())
+            meshProps().release<COLOR_E>();
+        if (meshProps().isAllocated<COLOR_V>())
+            meshProps().release<COLOR_V>();
+        meshProps().allocate<COLOR_F>(Vec4f(1.0f, 1.0f, 1.0f, 0.0f));
+        meshProps().allocate<COLOR_E>(Vec4f(1.0f, 1.0f, 1.0f, 0.0f));
+        meshProps().allocate<COLOR_V>(Vec4f(1.0f, 1.0f, 1.0f, 0.0f));
+
+        for (FH f : tetMesh.faces())
+        {
+            bool hasTouched = false;
+            for (VH v : tetMesh.face_vertices(f))
+                if (meshProps().get<TOUCHED>(v))
+                {
+                    hasTouched = true;
+                    break;
+                }
+            FH p = meshProps().get<MC_PATCH>(f);
+            if (!p.is_valid())
+                meshProps().set<COLOR_F>(f, Vec4f(1.0f, 1.0f, 1.0f, 0.0f));
+            else
+            {
+                if (highlight && hasTouched)
+                {
+                    meshProps().set<COLOR_F>(f, colorHighlight);
+                }
+                else
+                    switch (highlight ? mcMeshProps().get<MARK_P>(p) : (mcMeshProps().get<MARK_P>(p) % 1000))
+                    {
+                    case 0:
+                        meshProps().set<COLOR_F>(f, color0P);
+                        break;
+                    case 4:
+                        meshProps().set<COLOR_F>(f, color4P);
+                        break;
+                    case 5:
+                        meshProps().set<COLOR_F>(f, color5P);
+                        break;
+                    case 6:
+                        meshProps().set<COLOR_F>(f, color6P);
+                        break;
+                    default:
+                        meshProps().set<COLOR_F>(f, Vec4f(1.0f, 1.0f, 1.0f, 0.0f));
+                    }
+            }
+        }
+        for (EH e : tetMesh.edges())
+        {
+            bool hasTouched = false;
+            for (VH v : tetMesh.edge_vertices(e))
+                if (meshProps().get<TOUCHED>(v))
+                {
+                    hasTouched = true;
+                    break;
+                }
+            EH a = meshProps().get<MC_ARC>(e);
+            if (!a.is_valid())
+                meshProps().reset<COLOR_E>(e);
+            else if (highlight && hasTouched)
+            {
+                meshProps().set<COLOR_E>(e, colorHighlight);
+            }
+            else
+                switch (highlight ? mcMeshProps().get<MARK_A>(a) : (mcMeshProps().get<MARK_A>(a) % 1000))
+                {
+                case 0:
+                    meshProps().set<COLOR_E>(e, color0A);
+                    break;
+                case 1:
+                    meshProps().set<COLOR_E>(e, color1A);
+                    break;
+                case 2:
+                    meshProps().set<COLOR_E>(e, color2A);
+                    break;
+                case 3:
+                    meshProps().set<COLOR_E>(e, color3A);
+                    break;
+                default:
+                    meshProps().set<COLOR_E>(e, colorHighlight);
+                }
+        }
+        for (VH v : tetMesh.vertices())
+        {
+            VH n = meshProps().get<MC_NODE>(v);
+            if (!n.is_valid())
+                meshProps().reset<COLOR_V>(v);
+            else
+            {
+                if (highlight && meshProps().get<TOUCHED>(v))
+                {
+                    meshProps().set<COLOR_V>(v, colorHighlight);
+                }
+                else
+                    switch (highlight ? mcMeshProps().get<MARK_N>(n) : (mcMeshProps().get<MARK_N>(n) % 1000))
+                    {
+                    case 0:
+                        meshProps().set<COLOR_V>(v, color0A);
+                        break;
+                    case 3:
+                        meshProps().set<COLOR_V>(v, color3A);
+                        break;
+                    default:
+                        meshProps().set<COLOR_V>(v, colorHighlight);
+                    }
+            }
+        }
+    };
+
+    bool newCollapseDir = true;
+    bool change = true;
+    auto executeUntilNextChange = [&, this]()
+    {
+        do
+        {
+            if (collapseNextPillowBlock() || collapseNextPillowPatch() || bisectNextBlockByPillowPatch()
+                || collapseNextZeroArc() || bisectNextAlmostPillowPatch(false) || bisectNextAlmostPillowBlock())
+            {
+                change = true;
+                return;
+            }
+
+            if (!newCollapseDir && hasZeroLengthArcs())
+            {
+                assignCollapseDirs();
+                newCollapseDir = true;
+            }
+            else if (bisectNextZeroPatch(true))
+            {
+                newCollapseDir = false;
+                change = true;
+                return;
+            }
+            else
+                newCollapseDir = false;
+        } while (newCollapseDir);
+    };
+
+    double cylinderRadius = 0.0;
+    double sphereRadius = 0.0;
+    {
+        double avgEdgeLength = 0.0;
+        double minEdgeLength = DBL_MAX;
+        vector<double> edgeLengths;
+        edgeLengths.reserve(tetMesh.n_logical_edges());
+        for (EH e : tetMesh.edges())
+        {
+            double length = tetMesh.length(e);
+            minEdgeLength = std::min(minEdgeLength, length);
+            avgEdgeLength += length;
+            edgeLengths.emplace_back(length);
+        }
+        avgEdgeLength /= tetMesh.n_logical_edges();
+        std::sort(edgeLengths.begin(), edgeLengths.end());
+        double percentileEdgeLength = edgeLengths.at((size_t)(edgeLengths.size() * 0.01));
+
+        Vec3d bboxMin(DBL_MAX, DBL_MAX, DBL_MAX);
+        Vec3d bboxMax(-DBL_MAX, -DBL_MAX, -DBL_MAX);
+        for (VH v : tetMesh.vertices())
+        {
+            Vec3d pos = tetMesh.vertex(v);
+            for (int i = 0; i < 3; i++)
+            {
+                if (pos[i] > bboxMax[i])
+                    bboxMax[i] = pos[i];
+                if (pos[i] < bboxMin[i])
+                    bboxMin[i] = pos[i];
+            }
+        }
+        Vec3d diagonal = (bboxMax - bboxMin);
+        double bboxDiameter = (diagonal).length();
+        // double scalefactor = 7.0 / std::max(diagonal[0], std::max(diagonal[1], diagonal[2]));
+        percentileEdgeLength = std::max(percentileEdgeLength, bboxDiameter / 150.0);
+        cylinderRadius = percentileEdgeLength * 0.4;
+        sphereRadius = percentileEdgeLength * 0.8;
+    }
+
+    markZeros();
+    setZeroColors();
+    volumeshOS::VMesh mesh;
+    auto updateVMesh = [&, this](bool onlyColors = false)
+    {
+        if (!onlyColors)
+        {
+            if (!mesh.is_valid())
+            {
+                LOG(INFO) << "loading vismesh";
+                mesh = volumeshOS::load(&tetMesh);
+                volumeshOS::Internal::AppState::settings.camera.position = {3.8, 7.5, 20.0};
+                volumeshOS::Internal::AppState::settings.camera.mode = volumeshOS::CameraMode::FLY;
+                volumeshOS::set_camera_mode(volumeshOS::CameraMode::FLY);
+                volumeshOS::set_camera_position(3.8, 7.5, 20.0);
+
+                mesh.set_cell_rounding(0.0);
+                mesh.set_scale(1.00);
+                mesh.use_base_color(false);
+                mesh.set_lighting_mode(volumeshOS::LightingMode::PHONG);
+                mesh.set_shading_mode(volumeshOS::ShadingMode::FLAT);
+                mesh.set_ambient(0.7f);
+                mesh.set_diffuse(0.3f);
+                mesh.set_specular(0.1f);
+                mesh.set_specular_coefficient(8.0f);
+                mesh.use_two_sided_lighting(true);
+            }
+            else
+            {
+                volumeshOS::update(mesh, &tetMesh);
+                // mesh.set_cell_rounding(0.0);
+                // mesh.set_scale(1.00);
+                // mesh.use_base_color(false);
+                // mesh.set_lighting_mode(volumeshOS::LightingMode::PHONG);
+                // mesh.set_shading_mode(volumeshOS::ShadingMode::FLAT);
+                // mesh.set_ambient(0.7f);
+                // mesh.set_diffuse(0.3f);
+                // mesh.set_specular(0.1f);
+                // mesh.set_specular_coefficient(8.0f);
+                // mesh.use_two_sided_lighting(true);
+            }
+        }
+        volumeshOS::remove_shapes();
+        // Actual mesh: ignore block 3
+        for (HFH hf : tetMesh.halffaces())
+        {
+            FH f = tetMesh.face_handle(hf);
+            mesh.set_color(hf, meshProps().get<COLOR_F>(f));
+        }
+        for (EH e : tetMesh.edges())
+        {
+            if (meshProps().get<COLOR_E>(e)[3] > 0.0)
+            {
+                auto highlight = mesh.add_shape<volumeshOS::VCylinder>();
+                assert(!tetMesh.is_deleted(e));
+                auto vs = tetMesh.edge_vertices(e);
+                Vec3d dir = tetMesh.vertex(vs[1]) - tetMesh.vertex(vs[0]);
+                highlight.set_position(tetMesh.vertex(vs[0]) + 0.5 * dir);
+                highlight.set_color(meshProps().get<COLOR_E>(e));
+                highlight.set_direction(dir.normalized());
+                highlight.set_scale(OVM::Vec3d({cylinderRadius, dir.norm(), cylinderRadius}));
+            }
+        }
+        for (VH v : tetMesh.vertices())
+        {
+            if (meshProps().get<COLOR_V>(v)[3] > 0.0)
+            {
+                Vec3d pos = tetMesh.vertex(v);
+                auto highlight = mesh.add_shape<volumeshOS::VSphere>();
+                highlight.set_position(pos);
+                highlight.set_color(meshProps().get<COLOR_V>(v));
+                highlight.set_scale((float)sphereRadius);
+            }
+        }
+    };
+
+    std::string screenshotFilename = "screenshot";
+    struct ExportOptions
+    {
+        int width = -1;                  // viewport width by default
+        int height = -1;                 // viewport height by default
+        bool include_background = true;  // include background in image
+        bool include_shapes = true;      // include shapes in image
+        bool include_ground = true;      // include ground in image
+        bool ground_shadow_only = false; // if ground and shadows are active, export only the area in shadow
+    };
+    static int scrnum = 0;
+    auto makeScreenShot = [&]()
+    {
+        volumeshOS::ExportOptions exopt;
+        exopt.width = volumeshOS::get_viewport_width();   // viewport width by default
+        exopt.height = volumeshOS::get_viewport_height(); // viewport height by default
+        exopt.include_background = true;                  // include background in image
+        exopt.include_shapes = true;                      // include shapes in image
+        exopt.include_ground = true;                      // include ground in image
+        exopt.ground_shadow_only = true; // if ground and shadows are active, export only the area in shadow
+
+        auto str = std::to_string(scrnum++);
+        auto num = std::string(5 - std::min(5ul, str.length()), '0') + str;
+        volumeshOS::export_image("./" + screenshotFilename + num + ".png", exopt);
+    };
+
+    volumeshOS::use_transparency(true);
+    volumeshOS::use_shadows(true);
+    volumeshOS::set_shape_lighting_mode(volumeshOS::LightingMode::PHONG);
+    volumeshOS::set_shape_ambient(0.75f);
+    volumeshOS::set_shape_diffuse(0.25f);
+    volumeshOS::set_shape_specular(0.3f);
+    volumeshOS::set_shape_specular_coefficient(8.0f);
+    volumeshOS::set_sky_color(OVM::Vec3f{1.0f, 1.0f, 1.0f});
+    volumeshOS::set_ground_color(OVM::Vec3f{1.0f, 1.0f, 1.0f});
+    volumeshOS::Internal::AppState::settings.light.color = {1.0f, 1.0f, 1.0f};
+    volumeshOS::Internal::AppState::settings.sky.sky_color = {1.0f, 1.0f, 1.0f};
+    volumeshOS::Internal::AppState::settings.sky.fog_density = 0.0f;
+    volumeshOS::Internal::AppState::settings.post_processing.active = false;
+    volumeshOS::Internal::AppState::settings.ground.use_pbr = false;
+    volumeshOS::Internal::AppState::settings.shadow.shadow_strength = 0.24f;
+    volumeshOS::Internal::AppState::settings.shadow.penumbra_scale = 22.0f;
+    updateVMesh();
+
+    bool animating = false;
+    int stage = 0;
+    set<FH> psOptimized;
+    set<EH> asOnQ;
+    list<EH> as;
+    map<EH, int> a2timesOptimized;
+
+    int quantEnabled = 1;
+    bool justFinished = false;
+    auto animate = [&]()
+    {
+        if (stage == 0)
+        {
+            markZeros();
+
+            float tempAlpha = 1.0;
+            std::swap(tempAlpha, color0P[3]);
+            setZeroColors();
+            updateVMesh(true);
+            makeScreenShot();
+            std::swap(tempAlpha, color0P[3]);
+            stage++;
+        }
+        else if (stage == 1)
+        {
+            setZeroColors();
+            updateVMesh(true);
+            makeScreenShot();
+            change = true;
+            stage++;
+        }
+        else if (stage == 2)
+        {
+            if (change)
+                newCollapseDir = false;
+            change = false;
+
+            remesher.collapseAllPossibleEdges(true, true, false, false);
+            executeUntilNextChange();
+            setZeroColors();
+            markZeros();
+            updateVMesh();
+            makeScreenShot();
+            if (!change)
+            {
+                stage++;
+                reducer.init(true, true, true);
+            }
+        }
+        else if (stage == 3)
+        {
+            if (reducer.isReducible())
+            {
+                reducer.removeNextPatch();
+                setZeroColors();
+                markZeros();
+                updateVMesh();
+                makeScreenShot();
+            }
+            else
+            {
+                psOptimized.clear();
+                as.clear();
+                asOnQ.clear();
+                a2timesOptimized.clear();
+                for (EH a : mcMesh.edges())
+                    as.push_back(a);
+                asOnQ = set<EH>(as.begin(), as.end());
+                stage++;
+            }
+        }
+        else if (stage == 4)
+        {
+            MCSmoother(meshProps()).smoothMC();
+            setZeroColors();
+            markZeros();
+            updateVMesh();
+            makeScreenShot();
+            animating = false;
+            stage = 0;
+            quantEnabled = 2 * !zeroElementsRemain();
+            justFinished = true;
+        }
+    };
+
+    meshProps().allocate<TOUCHED>(true);
+    for (VH v : tetMesh.vertices())
+        meshProps().set<TOUCHED>(v, false);
+    double vol = 0.0;
+    for (CH tet : tetMesh.cells())
+        vol += doubleVolumeUVW(tet);
+    int nHexes = std::max(1,
+                          mcMeshProps().isAllocated<ARC_INT_LENGTH>()
+                              ? (int)StructurePreserver(meshProps()).numHexesInQuantization()
+                              : (int)std::round(vol));
+    int focusMode = 0;
+    int selectionID = -1;
+    bool init = false;
+    volumeshOS::on_gui_render(
+        [&, this]()
+        {
+            if (!init)
+            {
+                markZeros();
+                setZeroColors();
+                updateVMesh(true);
+                init = true;
+            }
+            if (animating)
+                animate();
+            ImGui::Begin("MyPanel");
+            if (ImGui::Button("UPDATE COLORING") || justFinished)
+            {
+                markZeros();
+                setZeroColors();
+                updateVMesh(true);
+                justFinished = false;
+            }
+            // if (ImGui::Button("SCREENSHOT"))
+            // {
+            //     makeScreenShot();
+            // }
+            if (quantEnabled)
+            {
+                if (ImGui::Button("QUANTIZE (using below parameters"))
+                {
+                    if (quantEnabled == 2 && meshProps().isAllocated<ALGO_VARIANT>())
+                        meshProps().set<ALGO_VARIANT>(3);
+                    StructurePreserver sep(meshProps());
+                    ObjectiveBuilder builder(meshProps());
+                    double scaling = std::max(0.001, std::cbrt(nHexes / vol));
+                    QuadraticObjective obj
+                        = (quantEnabled == 2
+                           || (meshProps().isAllocated<ALGO_VARIANT>() && ((meshProps().get<ALGO_VARIANT>() / 2) % 2)))
+                              ? ObjectiveBuilder(meshProps()).arcLengthDeviationObjective(scaling)
+                              : ObjectiveBuilder(meshProps()).simplifiedDistortionObjective(scaling, 0.01);
+                    ISPQuantizer(meshProps(), sep, obj).quantize(0.00);
+#ifndef QGP3D_WITHOUT_IQP
+                    IQPQuantizer(meshProps(), sep, obj).quantize(0.0, 30);
+#endif
+                    markZeros();
+                    setZeroColors();
+                    updateVMesh();
+                }
+            }
+            else
+            {
+                if (ImGui::Button("[Quantization disabled after collapsing]"))
+                {
+                }
+            }
+            if (ImGui::Button("SINGLE COLLAPSING STEP"))
+            {
+                if (change)
+                    newCollapseDir = false;
+                change = false;
+
+                remesher.collapseAllPossibleEdges(true, true, false, false);
+                executeUntilNextChange();
+                setZeroColors();
+                markZeros();
+                updateVMesh();
+                assertValidMC(false, false);
+                quantEnabled = 2 * !zeroElementsRemain();
+                if (quantEnabled == 2)
+                    justFinished = true;
+            }
+            if (ImGui::Button("10 STEPS"))
+            {
+                change = true;
+                for (int i = 0; i < 10 && change; i++)
+                {
+                    if (change)
+                        newCollapseDir = false;
+                    change = false;
+
+                    remesher.collapseAllPossibleEdges(true, true, false, false);
+                    executeUntilNextChange();
+                }
+                setZeroColors();
+                markZeros();
+                updateVMesh();
+                assertValidMC(false, false);
+                quantEnabled = 2 * !zeroElementsRemain();
+                if (quantEnabled == 2)
+                    justFinished = true;
+            }
+            if (ImGui::Button("50 STEPS"))
+            {
+                change = true;
+                for (int i = 0; i < 50 && change; i++)
+                {
+                    if (change)
+                        newCollapseDir = false;
+                    change = false;
+
+                    remesher.collapseAllPossibleEdges(true, true, false, false);
+                    executeUntilNextChange();
+                }
+                setZeroColors();
+                markZeros();
+                updateVMesh();
+                assertValidMC(false, false);
+                quantEnabled = 2 * !zeroElementsRemain();
+                if (quantEnabled == 2)
+                    justFinished = true;
+            }
+            if (ImGui::Button("FINISH COLLAPSING"))
+            {
+                change = true;
+                while (change)
+                {
+                    if (change)
+                        newCollapseDir = false;
+                    change = false;
+
+                    remesher.collapseAllPossibleEdges(true, true, false, false);
+                    executeUntilNextChange();
+                }
+                setZeroColors();
+                markZeros();
+                updateVMesh();
+                assertValidMC(false, false);
+                quantEnabled = 2 * !zeroElementsRemain();
+                if (quantEnabled == 2)
+                    justFinished = true;
+            }
+            if (ImGui::Button("REDUCE (Postprocess after collapsing)"))
+            {
+                change = true;
+                reducer.init(true, true, true);
+                while (reducer.isReducible())
+                {
+                    reducer.removeNextPatch();
+                }
+                setZeroColors();
+                markZeros();
+                updateVMesh();
+                assertValidMC(false, false);
+                justFinished = true;
+            }
+            if (ImGui::Button("DECIMATE_TETMESH (Reduce cell count)"))
+            {
+                assertValidMC(false, false);
+                meshProps().allocate<TOUCHED>(true);
+                remesher.collapseAllPossibleEdges(true, true, false, false);
+                setZeroColors();
+                markZeros();
+                updateVMesh();
+                assertValidMC(false, false);
+                justFinished = true;
+            }
+            if (ImGui::Button("REMESH_TETMESH (Improve cell geometry)"))
+            {
+                remesher.remeshToImproveAngles(true, false, TetRemesher::QualityMeasure::ANGLES, -1);
+                setZeroColors();
+                markZeros();
+                updateVMesh();
+                assertValidMC(false, false);
+                justFinished = true;
+            }
+            if (ImGui::Button("SMOOTH MC (Postprocess for less jagged MC geometry)"))
+            {
+                if (!zeroElementsRemain())
+                {
+                    reducer.init(true, true, true);
+                    while (reducer.isReducible())
+                        reducer.removeNextPatch();
+                }
+                MCSmoother(meshProps()).smoothMC();
+                setZeroColors();
+                markZeros();
+                updateVMesh();
+                assertValidMC(false, false);
+                justFinished = true;
+            }
+            if (ImGui::Button("ANIMATE COLLAPSING (and make screenshots)"))
+            {
+                animating = true;
+                quantEnabled = 0;
+            }
+            if (volumeshOS::Internal::ImGuiUtil::begin_menu_with_background("Visualization", 12))
+            {
+                volumeshOS::Internal::ImGuiUtil::menu_item_filled(
+                    "Target hexes for quantization",
+                    [&] { ImGui::InputInt("##Target hexes for quantization", &nHexes); });
+
+                volumeshOS::Internal::ImGuiUtil::menu_item_filled(
+                    "ScreenshotFilename", [&] { ImGui::InputText("##ScreenshotFilename", &screenshotFilename); });
+                volumeshOS::Internal::ImGuiUtil::menu_item_filled(
+                    "CylinderRadius", [&] { ImGui::InputDouble("##CylinderRadius", &cylinderRadius); });
+                volumeshOS::Internal::ImGuiUtil::menu_item_filled(
+                    "SphereRadius", [&] { ImGui::InputDouble("##SphereRadius", &sphereRadius); });
+                volumeshOS::Internal::ImGuiUtil::menu_item_filled(
+                    "", [&] { ImGui::ColorEdit4("Color0A", color0A.data(), ImGuiColorEditFlags_NoInputs); });
+                volumeshOS::Internal::ImGuiUtil::menu_item_filled(
+                    "", [&] { ImGui::ColorEdit4("Color1A", color1A.data(), ImGuiColorEditFlags_NoInputs); });
+                volumeshOS::Internal::ImGuiUtil::menu_item_filled(
+                    "", [&] { ImGui::ColorEdit4("Color2A", color2A.data(), ImGuiColorEditFlags_NoInputs); });
+                volumeshOS::Internal::ImGuiUtil::menu_item_filled(
+                    "", [&] { ImGui::ColorEdit4("Color3A", color3A.data(), ImGuiColorEditFlags_NoInputs); });
+                volumeshOS::Internal::ImGuiUtil::menu_item_filled(
+                    "", [&] { ImGui::ColorEdit4("Color0P", color0P.data(), ImGuiColorEditFlags_NoInputs); });
+                volumeshOS::Internal::ImGuiUtil::menu_item_filled(
+                    "", [&] { ImGui::ColorEdit4("Color4P", color4P.data(), ImGuiColorEditFlags_NoInputs); });
+                volumeshOS::Internal::ImGuiUtil::menu_item_filled(
+                    "", [&] { ImGui::ColorEdit4("Color5P", color5P.data(), ImGuiColorEditFlags_NoInputs); });
+                volumeshOS::Internal::ImGuiUtil::menu_item_filled(
+                    "", [&] { ImGui::ColorEdit4("Color6P", color6P.data(), ImGuiColorEditFlags_NoInputs); });
+                volumeshOS::Internal::ImGuiUtil::end_menu();
+            }
+            if (volumeshOS::Internal::ImGuiUtil::begin_menu_with_background("Focus", 3))
+            {
+                volumeshOS::Internal::ImGuiUtil::menu_item_filled("Select by ID",
+                                                                  [&]
+                                                                  {
+                                                                      constexpr const char* selection_modes[] = {
+                                                                          "Off", "Vertices", "Edges", "Faces", "Cells"};
+                                                                      ImGui::Combo("##SelectionMode",
+                                                                                   &focusMode,
+                                                                                   selection_modes,
+                                                                                   IM_ARRAYSIZE(selection_modes),
+                                                                                   IM_ARRAYSIZE(selection_modes));
+                                                                  });
+                volumeshOS::Internal::ImGuiUtil::menu_item_filled(
+                    "ID", [&] { ImGui::InputInt("##ManualSelectionID", &selectionID); });
+                volumeshOS::Internal::ImGuiUtil::menu_item_filled(
+                    "",
+                    [&]
+                    {
+                        if (ImGui::Button("Focus"))
+                        {
+                            volumeshOS::set_camera_mode(volumeshOS::CameraMode::ORBIT);
+                            Vec3d target;
+                            switch (focusMode)
+                            {
+                            case 0:
+                                volumeshOS::set_camera_mode(volumeshOS::CameraMode::FLY);
+                                break;
+                            case 1:
+                                if (selectionID >= 0 && selectionID <= (int)tetMesh.n_vertices())
+                                    target = tetMesh.vertex(VH(selectionID));
+                                else
+                                    volumeshOS::set_camera_mode(volumeshOS::CameraMode::FLY);
+                                break;
+                            case 2:
+                                if (selectionID >= 0 && selectionID <= (int)tetMesh.n_edges())
+                                {
+                                    auto vs = tetMesh.edge_vertices(EH(selectionID));
+                                    target = 0.5 * tetMesh.vertex(vs[0]) + 0.5 * tetMesh.vertex(vs[1]);
+                                }
+                                else
+                                    volumeshOS::set_camera_mode(volumeshOS::CameraMode::FLY);
+                                break;
+                            case 3:
+                                if (selectionID >= 0 && selectionID <= (int)tetMesh.n_faces())
+                                {
+                                    vector<Vec3d> vs;
+                                    for (VH v : tetMesh.face_vertices(FH(selectionID)))
+                                        vs.push_back(tetMesh.vertex(v));
+                                    for (Vec3d pos : vs)
+                                        target += pos;
+                                    target /= vs.size();
+                                }
+                                else
+                                    volumeshOS::set_camera_mode(volumeshOS::CameraMode::FLY);
+                                break;
+                            case 4:
+                                if (selectionID >= 0 && selectionID <= (int)tetMesh.n_cells())
+                                {
+                                    vector<Vec3d> vs;
+                                    for (VH v : tetMesh.cell_vertices(CH(selectionID)))
+                                        vs.push_back(tetMesh.vertex(v));
+                                    for (Vec3d pos : vs)
+                                        target += pos;
+                                    target /= vs.size();
+                                }
+                                else
+                                    volumeshOS::set_camera_mode(volumeshOS::CameraMode::FLY);
+                                break;
+                            default:
+                                break;
+                            }
+                            volumeshOS::set_camera_target(mesh.get_transformed_point(target));
+                        }
+                    });
+                volumeshOS::Internal::ImGuiUtil::end_menu();
+            }
+
+            ImGui::End();
+        });
+
+    volumeshOS::open();
+
+    if (zeroElementsRemain())
+    {
+        change = true;
+        while (change)
+        {
+            if (change)
+                newCollapseDir = false;
+            change = false;
+
+            remesher.collapseAllPossibleEdges(true, true, false, false);
+            executeUntilNextChange();
+        }
+    }
+
+    if (zeroElementsRemain())
+        return COLLAPSE_ERROR;
+
+    reducer.init(true, true, true);
+    while (reducer.isReducible())
+    {
+        reducer.removeNextPatch();
+        assertValidMC(false, true);
+    }
+
+    assertValidMC(true, true);
+    meshProps().allocate<TOUCHED>(true);
+
+    if (optimize)
+    {
+        remesher.collapseAllPossibleEdges(false, true, true, true, 10.0);
+        assertValidMC(true, true);
+        remesher.remeshToImproveAngles(true, false, TetRemesher::QualityMeasure::ANGLES);
+        assertValidMC(true, true);
+        MCSmoother(meshProps()).smoothMC();
+    }
+
+    assertValidMC(true, true);
+    return SUCCESS;
+#endif
 }
 
 MCCollapser::RetCode MCCollapser::collapseAllZeroElements(bool optimize, bool randomOrder, int direction)
@@ -304,7 +1150,7 @@ MCCollapser::RetCode MCCollapser::collapsePillowPatch(const FH& pCollapse, const
     HEH haMoving = *has.begin();
     HEH haStationary = *(++has.begin());
 
-    determineStationaryEnd(haMoving, haStationary);
+    determineStationaryEnd(pCollapse, haMoving, haStationary);
     auto ret = EmbeddingCollapser(meshProps()).collapsePillowPatchEmbedding(pCollapse, haMoving, haStationary);
     if (ret != EmbeddingCollapser::SUCCESS)
         throw std::logic_error("Rerouting failed");
@@ -373,28 +1219,21 @@ void MCCollapser::collapseArcConnectivity(const HEH& haCollapse)
             if (b.is_valid())
                 bsOnCollapse.insert(b);
 
-    // Reconnect arcs incident on nFrom to nTo
-    for (EH a : asOnFrom)
-    {
-        auto vs = mcMesh.edge_vertices(a);
-        if (vs[0] == nFrom)
-            vs[0] = nTo;
-        if (vs[1] == nFrom)
-            vs[1] = nTo;
-        mcMesh.set_edge(a, vs[0], vs[1]);
-    }
-
-    DLOG(INFO) << "DELETING NODE " << nFrom;
+    DLOG(INFO) << "DELETING NODE " << nFrom << " AND REPLACING BY " << nTo;
 
     // UPDATE REFERENCES TO NODES IN BLOCKS
     for (CH b : bsOnFrom)
     {
-        bool containsACollapse = bsOnCollapse.count(b) != 0;
+        bool containsNTo = contains(mcMesh.cell_vertices(b), nTo);
+        bool oneIsCorner = containsMatching(mcMeshProps().ref<BLOCK_CORNER_NODES>(b),
+                                            [&](const pair<const UVWDir, VH>& kv)
+                                            { return kv.second == nTo || kv.second == nFrom; });
+
         for (auto& dir2n : mcMeshProps().ref<BLOCK_CORNER_NODES>(b))
             if (dir2n.second == nFrom)
             {
                 dir2n.second = nTo;
-                if (containsACollapse)
+                if (containsNTo)
                 {
                     for (UVWDir dirEdge : DIM_2_DIRS)
                         mcMeshProps().ref<BLOCK_EDGE_NODES>(b).at(dirEdge).erase(nTo);
@@ -409,9 +1248,9 @@ void MCCollapser::collapseArcConnectivity(const HEH& haCollapse)
             if (it != dir2ns.second.end())
             {
                 dir2ns.second.erase(it);
-                if (!containsACollapse)
+                if (!containsNTo)
                     dir2ns.second.insert(nTo);
-                else if (mcMeshProps().ref<BLOCK_EDGE_ARCS>(b).at(dir2ns.first).count(aCollapse) != 0)
+                else if (mcMeshProps().ref<BLOCK_EDGE_ARCS>(b).at(dir2ns.first).count(aCollapse) != 0 || oneIsCorner)
                 {
                     // Do nothing
                 }
@@ -445,7 +1284,7 @@ void MCCollapser::collapseArcConnectivity(const HEH& haCollapse)
             if (it != dir2ns.second.end())
             {
                 dir2ns.second.erase(it);
-                if (!containsACollapse && !edgesHaveTo)
+                if (!containsNTo && !edgesHaveTo)
                     dir2ns.second.insert(nTo);
             }
             if (edgesHaveTo)
@@ -455,6 +1294,17 @@ void MCCollapser::collapseArcConnectivity(const HEH& haCollapse)
                     dir2ns.second.erase(it);
             }
         }
+    }
+
+    // Reconnect arcs incident on nFrom to nTo
+    for (EH a : asOnFrom)
+    {
+        auto vs = mcMesh.edge_vertices(a);
+        if (vs[0] == nFrom)
+            vs[0] = nTo;
+        if (vs[1] == nFrom)
+            vs[1] = nTo;
+        mcMesh.set_edge(a, vs[0], vs[1]);
     }
 
     deferredDeleteNode(nFrom);
@@ -488,6 +1338,8 @@ void MCCollapser::collapsePillowPatchConnectivity(const FH& p, const HEH& haRemo
 
     DLOG(INFO) << "DELETING PATCH " << p;
     DLOG(INFO) << "REPLACING ARC " << aRemoved << " BY " << aRemaining;
+    DLOG(INFO) << "AND HALFARC " << mcMesh.opposite_halfedge_handle(haRemoved) << " BY " << haRemaining;
+    DLOG(INFO) << "AND HALFARC " << haRemoved << " BY " << mcMesh.opposite_halfedge_handle(haRemaining);
 
     set<CH> bsOnP;
     for (CH b : mcMesh.face_cells(p))
@@ -503,20 +1355,16 @@ void MCCollapser::collapsePillowPatchConnectivity(const FH& p, const HEH& haRemo
             if (b.is_valid())
                 bsOnA2.insert(b);
 
-    bool flipA1AfterReplacement = mcMesh.edge_vertices(aRemaining)[0] != mcMesh.edge_vertices(aRemoved)[0];
+    bool flipA1AfterReplacement = (haRemaining.idx() % 2) == (haRemoved.idx() % 2);
     map<CH, UVWDir> b2dirA2;
     if (flipA1AfterReplacement)
         for (CH b : bsOnA2)
             b2dirA2[b] = halfarcDirInBlock(mcMesh.halfedge_handle(aRemoved, 0), b);
 
-    replaceArcIncidentPatches({{haRemoved, {tetMesh.opposite_halfedge_handle(haRemaining)}},
-                               {tetMesh.opposite_halfedge_handle(haRemoved), {haRemaining}}},
-                              psOnA2);
-    map<EH, EH> aRemovedReplacements({{aRemoved, aRemaining}});
-
     for (CH b : bsOnA2)
     {
-        bool containsP = bsOnP.count(b) != 0;
+        // bool containsP = bsOnP.count(b) != 0;
+        bool containsRemaining = contains(mcMesh.cell_edges(b), aRemaining);
 
         for (auto& dir2as : mcMeshProps().ref<BLOCK_EDGE_ARCS>(b))
         {
@@ -525,7 +1373,7 @@ void MCCollapser::collapsePillowPatchConnectivity(const FH& p, const HEH& haRemo
             {
                 dir2as.second.erase(it);
                 dir2as.second.insert(aRemaining);
-                if (containsP)
+                if (containsRemaining)
                 {
                     for (UVWDir dirFace : decompose(dir2as.first, DIM_1_DIRS))
                     {
@@ -544,17 +1392,7 @@ void MCCollapser::collapsePillowPatchConnectivity(const FH& p, const HEH& haRemo
             if (it != dir2as.second.end())
             {
                 dir2as.second.erase(it);
-                assert(
-                    !containsP || dir2as.second.count(aRemaining) != 0
-                    || mcMeshProps().ref<BLOCK_EDGE_ARCS>(b).at(compose(dir2as.first, DIM_2_DIRS)[0]).count(aRemaining)
-                           != 0
-                    || mcMeshProps().ref<BLOCK_EDGE_ARCS>(b).at(compose(dir2as.first, DIM_2_DIRS)[1]).count(aRemaining)
-                           != 0
-                    || mcMeshProps().ref<BLOCK_EDGE_ARCS>(b).at(compose(dir2as.first, DIM_2_DIRS)[2]).count(aRemaining)
-                           != 0
-                    || mcMeshProps().ref<BLOCK_EDGE_ARCS>(b).at(compose(dir2as.first, DIM_2_DIRS)[3]).count(aRemaining)
-                           != 0);
-                if (!containsP)
+                if (!containsRemaining)
                     dir2as.second.insert(aRemaining);
             }
         }
@@ -572,7 +1410,13 @@ void MCCollapser::collapsePillowPatchConnectivity(const FH& p, const HEH& haRemo
             mcMeshProps().ref<BLOCK_ALL_ARCS>(b).at(flipA1AfterReplacement ? -dirA2 : dirA2).insert(aRemaining);
     }
 
-    mcMeshProps().reset<ARC_MESH_HALFEDGES>(aRemoved);
+    replaceArcIncidentPatches({{haRemoved, {tetMesh.opposite_halfedge_handle(haRemaining)}},
+                               {tetMesh.opposite_halfedge_handle(haRemoved), {haRemaining}}},
+                              psOnA2);
+    map<EH, EH> aRemovedReplacements({{aRemoved, aRemaining}});
+
+    int singularityIdx = mcMeshProps().get<IS_SINGULAR>(aRemaining) + mcMeshProps().get<IS_SINGULAR>(aRemoved);
+    mcMeshProps().set<IS_SINGULAR>(aRemaining, singularityIdx);
 
     replacePatchIncidentBlocks({{tetMesh.halfface_handle(p, 0), {}}, {tetMesh.halfface_handle(p, 1), {}}}, bsOnP);
     map<FH, vector<FH>> pReplacements({{p, {}}});
@@ -587,10 +1431,14 @@ void MCCollapser::collapsePillowPatchConnectivity(const FH& p, const HEH& haRemo
 void MCCollapser::collapsePillowBlockConnectivity(const CH& b, const HFH& hpRemoved, const HFH& hpRemaining)
 {
     auto& mcMesh = mcMeshProps().mesh();
-    auto& tetMesh = meshProps().mesh();
 
     FH pRemaining = hpRemaining.is_valid() ? mcMesh.face_handle(hpRemaining) : FH(-1);
     FH pRemoved = mcMesh.face_handle(hpRemoved);
+
+    vector<HEH> has;
+    if (hpRemaining.is_valid())
+        for (HEH ha : mcMesh.face_halfedges(pRemaining))
+            has.push_back(ha);
 
     set<CH> bsOnP2;
     for (CH b2 : mcMesh.face_cells(pRemoved))
@@ -623,24 +1471,25 @@ void MCCollapser::collapsePillowBlockConnectivity(const CH& b, const HFH& hpRemo
     map<FH, vector<FH>> pReplacements;
     if (hpRemaining.is_valid())
     {
-        hpReplacements = {{hpRemoved, {tetMesh.opposite_halfface_handle(hpRemaining)}},
-                          {tetMesh.opposite_halfface_handle(hpRemoved), {hpRemaining}}};
+        hpReplacements = {{hpRemoved, {mcMesh.opposite_halfface_handle(hpRemaining)}},
+                          {mcMesh.opposite_halfface_handle(hpRemoved), {hpRemaining}}};
         pReplacements = {{pRemoved, {pRemaining}}};
     }
     else
     {
-        hpReplacements = {{hpRemoved, {}}, {tetMesh.opposite_halfface_handle(hpRemoved), {}}};
+        hpReplacements = {{hpRemoved, {}}, {mcMesh.opposite_halfface_handle(hpRemoved), {}}};
         pReplacements = {{pRemoved, {}}};
     }
     replacePatchIncidentBlocks(hpReplacements, bsOnP2);
     updateBlockPatchReferences(pReplacements, bsOnP2);
 
-    mcMeshProps().reset<PATCH_MESH_HALFFACES>(pRemoved);
-
     if (hpRemaining.is_valid() && mcMeshProps().isAllocated<PATCH_MIN_DIST>())
         mcMeshProps().set<PATCH_MIN_DIST>(
             pRemoved,
             std::min(mcMeshProps().get<PATCH_MIN_DIST>(pRemaining), mcMeshProps().get<PATCH_MIN_DIST>(pRemoved)));
+
+    if (hpRemaining.is_valid())
+        mcMesh.set_face(pRemaining, has);
 
     DLOG(INFO) << "REPLACING PATCH " << pRemoved << " BY " << pRemaining;
     deferredDeletePatch(pRemoved);
@@ -695,8 +1544,18 @@ bool MCCollapser::collapseNextPillowPatch()
             has.insert(ha);
         if (has.size() == 2 && *(has.begin()) != mcMesh.opposite_halfedge_handle(*(++has.begin())))
         {
-            collapsePillowPatch(p, has);
-            return true;
+            HEH ha1 = *has.begin();
+            HEH ha2 = *(++has.begin());
+            determineStationaryEnd(p, ha1, ha2);
+            if (ha1.is_valid())
+            {
+                collapsePillowPatch(p, has);
+                return true;
+            }
+            else
+            {
+                LOG(WARNING) << "Patch " << p << " skipped (this might be an algorithm error)";
+            }
         }
     }
     return false;
@@ -735,8 +1594,14 @@ bool MCCollapser::collapseNextPillowBlock()
             if (as1 != as2)
                 continue;
 
-            collapsePillowBlock(b);
-            return true;
+            determineStationaryEnd(hp1, hp2);
+            if (hp1.is_valid())
+            {
+                collapsePillowBlock(b);
+                return true;
+            }
+            else
+                LOG(WARNING) << "Block " << b << " skipped (this might be an algorithm error)";
         }
     }
     return false;
@@ -854,7 +1719,8 @@ set<FH> MCCollapser::findAlmostPillowPatches() const
         if (hasByDir.size() == 2)
         {
             hasZero = containsMatching(hasByDir,
-                                       [&](const pair<const UVWDir, vector<HEH>>& kv) {
+                                       [&](const pair<const UVWDir, vector<HEH>>& kv)
+                                       {
                                            return containsMatching(kv.second,
                                                                    [&, this](const HEH& ha)
                                                                    { return isZeroArc(mcMesh.edge_handle(ha)); });
@@ -883,8 +1749,9 @@ bool MCCollapser::bisectNextBlockByPillowPatch()
                     && mcMesh.from_vertex_handle(ha) == mcMesh.to_vertex_handle(ha2)
                     && mcMesh.to_vertex_handle(ha) == mcMesh.from_vertex_handle(ha2))
                 {
-                    assert(mcMeshProps().get<ARC_INT_LENGTH>(mcMesh.edge_handle(ha))
-                           == mcMeshProps().get<ARC_INT_LENGTH>(mcMesh.edge_handle(ha2)));
+                    if (mcMeshProps().get<ARC_INT_LENGTH>(mcMesh.edge_handle(ha))
+                        != mcMeshProps().get<ARC_INT_LENGTH>(mcMesh.edge_handle(ha2)))
+                        continue;
                     bool hasP = containsMatching(mcMesh.cell_faces(b),
                                                  [&, this](const FH& p)
                                                  {
@@ -911,7 +1778,7 @@ bool MCCollapser::bisectNextBlockByPillowPatch()
                             {
                                 if (ringAs.count(mcMesh.edge_handle(ha3)) != 0)
                                     continue;
-                                HFH hpNext = mcMesh.adjacent_halfface_in_cell(hp, ha3);
+                                HFH hpNext = safeAdjacentHalffaceInBlock(hp, ha3);
                                 if (!hpNext.is_valid() || sideHps.find(hpNext) != sideHps.end())
                                     continue;
                                 hpQ.emplace_back(hpNext);
@@ -1025,11 +1892,10 @@ void MCCollapser::assignCollapseDirs()
               [&](const EH& a, const EH& b) -> bool
               { return mcMeshProps().get<ARC_DBL_LENGTH>(a) < mcMeshProps().get<ARC_DBL_LENGTH>(b); });
 
-    EH aZero = findMatching(asZero,
-                            [&](const EH& a) {
-                                return !collapseIsLocked(mcMesh.halfedge_handle(a, 0))
-                                       || !collapseIsLocked(mcMesh.halfedge_handle(a, 1));
-                            });
+    EH aZero = findMatching(
+        asZero,
+        [&](const EH& a)
+        { return !collapseIsLocked(mcMesh.halfedge_handle(a, 0)) || !collapseIsLocked(mcMesh.halfedge_handle(a, 1)); });
 
     if (aZero.is_valid())
     {
@@ -1063,7 +1929,8 @@ void MCCollapser::assignCollapseDirs()
                     auto dirs2as = mcMeshProps().get<BLOCK_ALL_ARCS>(b);
                     bool hasZeroInDirNext
                         = containsMatching(mcMesh.cell_edges(bNext),
-                                           [&, this](const EH& a) {
+                                           [&, this](const EH& a)
+                                           {
                                                return isZeroArc(a)
                                                       && (halfarcDirInBlock(mcMesh.halfedge_handle(a, 0), b)
                                                           & (dirNext | -dirNext))
@@ -1076,13 +1943,15 @@ void MCCollapser::assignCollapseDirs()
                                                   auto dir2has = halfpatchHalfarcsByDir(hp2);
                                                   return containsMatching(
                                                       decompose(~(dirNormal | -dirNormal), DIM_1_DIRS),
-                                                      [&](const UVWDir& dir) {
+                                                      [&](const UVWDir& dir)
+                                                      {
                                                           return dir2has.count(dir) == 0
                                                                  && (dir & (dirNext | -dirNext)) != UVWDir::NONE;
                                                       });
                                               })
                           || containsMatching((UVWDir[]){UVWDir::POS_U, UVWDir::POS_V, UVWDir::POS_W},
-                                              [&](const UVWDir& dir) {
+                                              [&](const UVWDir& dir)
+                                              {
                                                   return dirs2as.count(dir) == 0 && dirs2as.count(-dir) == 0
                                                          && (dir & (dirNext | -dirNext)) != UVWDir::NONE;
                                               });
@@ -1134,66 +2003,59 @@ void MCCollapser::countZeroElements(int& numZeroAs, int& numZeroPs, int& numZero
 
 bool MCCollapser::zeroElementsRemain()
 {
-    auto& mcMesh = mcMeshProps().mesh();
+    int nAs, nPs, nBs;
+    countZeroElements(nAs, nPs, nBs);
 
-    return hasZeroLengthArcs()
-           || containsMatching(mcMesh.faces(),
-                               [&, this](const FH& p)
-                               {
-                                   HFH hp = mcMesh.halfface_handle(p, 0);
-                                   UVWDir dirNormal = halfpatchNormalDir(hp);
-                                   auto dir2has = halfpatchHalfarcsByDir(hp);
-                                   return containsMatching(decompose(~(dirNormal | -dirNormal), DIM_1_DIRS),
-                                                           [&](const UVWDir& dir) { return dir2has.count(dir) == 0; });
-                               })
-           || containsMatching(mcMesh.cells(),
-                               [&](const CH& b)
-                               {
-                                   auto& dirs2as = mcMeshProps().ref<BLOCK_ALL_ARCS>(b);
-                                   return containsMatching((UVWDir[]){UVWDir::POS_U, UVWDir::POS_V, UVWDir::POS_W},
-                                                           [&](const UVWDir& dir) {
-                                                               return dirs2as.count(dir) == 0
-                                                                      && dirs2as.count(-dir) == 0;
-                                                           });
-                               });
+    return nAs > 0 || nPs > 0 || nBs > 0;
 }
 
-void MCCollapser::determineStationaryEnd(HEH& haMoving, HEH& haStationary) const
+void MCCollapser::determineStationaryEnd(const FH& pCollapse, HEH& haMoving, HEH& haStationary) const
 {
     auto& mcMesh = mcMeshProps().mesh();
     EH aStationary = mcMesh.edge_handle(haStationary);
     EH aMoving = mcMesh.edge_handle(haMoving);
+
+    bool movingCritical = mcMeshProps().get<IS_CRITICAL_A>(aMoving)
+                          || (containsMatching(mcMesh.edge_faces(aMoving),
+                                               [&, this](const FH& p) { return mcMeshProps().get<IS_CRITICAL_P>(p); })
+                              && !mcMeshProps().get<IS_CRITICAL_P>(pCollapse));
+    bool stationaryCritical
+        = mcMeshProps().get<IS_CRITICAL_A>(aStationary)
+          || (containsMatching(mcMesh.edge_faces(aStationary),
+                               [&, this](const FH& p) { return mcMeshProps().get<IS_CRITICAL_P>(p); })
+              && !mcMeshProps().get<IS_CRITICAL_P>(pCollapse));
+    if (movingCritical && stationaryCritical)
+    {
+        haMoving = HEH();
+        haStationary = HEH();
+        return;
+    }
+    if (stationaryCritical)
+        return;
+    if (movingCritical)
+    {
+        std::swap(haStationary, haMoving);
+        return;
+    }
+
     // Soft criterion: valences
     if (mcMesh.valence(aMoving) > mcMesh.valence(aStationary))
     {
-        std::swap(aStationary, aMoving);
         std::swap(haStationary, haMoving);
+        return;
     }
 
-    // Hard criteria: boundary, feature, singularity
-    if (mcMeshProps().get<IS_SINGULAR>(aMoving) || (mcMesh.is_boundary(aMoving) && !mcMesh.is_boundary(aStationary))
-        || (mcMeshProps().isAllocated<IS_FEATURE_E>() && mcMeshProps().get<IS_FEATURE_E>(aMoving)))
+    if (mcMesh.valence(aMoving) == mcMesh.valence(aStationary))
     {
-        assert(!mcMeshProps().get<IS_SINGULAR>(aStationary));
-        assert(!mcMeshProps().isAllocated<IS_FEATURE_E>() || !mcMeshProps().get<IS_FEATURE_E>(aStationary));
-        std::swap(haStationary, haMoving);
-    }
-    else if (mcMeshProps().isAllocated<IS_FEATURE_F>())
-    {
-        bool hasFeaturePatchAStationary = false;
-        bool hasFeaturePatchAMoving = false;
-        for (FH pMoving : mcMesh.edge_faces(aStationary))
-            if (mcMeshProps().get<IS_FEATURE_F>(pMoving))
-                hasFeaturePatchAStationary = true;
-        for (FH pMoving : mcMesh.edge_faces(aMoving))
-            if (mcMeshProps().get<IS_FEATURE_F>(pMoving))
-                hasFeaturePatchAMoving = true;
-        if (hasFeaturePatchAMoving && !hasFeaturePatchAStationary)
-        {
-            assert(!mcMeshProps().get<IS_SINGULAR>(aStationary));
-            assert(!mcMeshProps().isAllocated<IS_FEATURE_E>() || !mcMeshProps().get<IS_FEATURE_E>(aStationary));
+        double lengthMoving = 0.0;
+        double lengthStationary = 0.0;
+        for (HEH he : mcMeshProps().ref<ARC_MESH_HALFEDGES>(aMoving))
+            lengthMoving += edgeLengthUVW<CHART>(meshProps().mesh().edge_handle(he));
+        for (HEH he : mcMeshProps().ref<ARC_MESH_HALFEDGES>(aStationary))
+            lengthStationary += edgeLengthUVW<CHART>(meshProps().mesh().edge_handle(he));
+
+        if (lengthStationary > lengthMoving)
             std::swap(haStationary, haMoving);
-        }
     }
 }
 
@@ -1202,22 +2064,36 @@ void MCCollapser::determineStationaryEnd(HFH& hpMoving, HFH& hpStationary) const
     auto& mcMesh = mcMeshProps().mesh();
 
     FH pMoving = mcMesh.face_handle(hpMoving);
+    FH pStationary = mcMesh.face_handle(hpStationary);
 
-    if (mcMesh.is_boundary(pMoving)
-        || (mcMeshProps().isAllocated<IS_FEATURE_F>() && mcMeshProps().get<IS_FEATURE_F>(pMoving)))
-        std::swap(hpStationary, hpMoving);
-    else
+    bool movingCritical = mcMesh.is_boundary(pMoving) || mcMeshProps().get<IS_CRITICAL_P>(pMoving);
+    bool stationaryCritical = mcMesh.is_boundary(pStationary) || mcMeshProps().get<IS_CRITICAL_P>(pStationary);
+
+    if (movingCritical && stationaryCritical)
     {
-        double areaMoving = 0.0;
-        double areaStationary = 0.0;
-        for (HFH hf : mcMeshProps().hpHalffaces(hpMoving))
-            areaMoving += areaUVW<CHART>(meshProps().mesh().face_handle(hf));
-        for (HFH hf : mcMeshProps().hpHalffaces(hpStationary))
-            areaStationary += areaUVW<CHART>(meshProps().mesh().face_handle(hf));
-
-        if (areaStationary > areaMoving)
-            std::swap(hpStationary, hpMoving);
+        hpMoving = HFH();
+        hpStationary = HFH();
+        return;
     }
+
+    if (movingCritical)
+    {
+        std::swap(hpStationary, hpMoving);
+        return;
+    }
+
+    if (stationaryCritical)
+        return;
+
+    double areaMoving = 0.0;
+    double areaStationary = 0.0;
+    for (HFH hf : mcMeshProps().hpHalffaces(hpMoving))
+        areaMoving += areaUVW<CHART>(meshProps().mesh().face_handle(hf));
+    for (HFH hf : mcMeshProps().hpHalffaces(hpStationary))
+        areaStationary += areaUVW<CHART>(meshProps().mesh().face_handle(hf));
+
+    if (areaStationary > areaMoving)
+        std::swap(hpStationary, hpMoving);
 }
 
 void MCCollapser::markZeros()

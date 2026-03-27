@@ -387,7 +387,8 @@ SurfaceRouter::RetCode SurfaceRouter::calcMinimalSurfaceByLP(set<CH>& space,
                             DLOG(INFO) << "Adding constraint over " << kv.second.size()
                                        << " halffaces, that sum must be less/equal than "
                                        << (double)((int)kv.second.size() - 1);
-                            model.addRow(vars.size(), vars.data(), coeffs.data(), -DBL_MAX, (double)((int)kv.second.size() - 1));
+                            model.addRow(
+                                vars.size(), vars.data(), coeffs.data(), -DBL_MAX, (double)((int)kv.second.size() - 1));
                         }
                     }
                     if (nonManifoldSolution)
@@ -753,6 +754,8 @@ SurfaceRouter::RetCode SurfaceRouter::shiftSurfaceThroughBlock(const CH& b, set<
             hfsList.pop_front();
             if (surfaceHfsToFlip.count(hf) != 0)
             {
+                if (tetMesh.is_boundary(hf))
+                    throw std::logic_error("Wrong side hf in surfaceHfsToFlip");
                 assert(transferredTets.count(tetMesh.incident_cell(hf)) == 0);
                 if (transferCreatesNonmanifold(hf, currentHfs, currentEs, currentVs) == NONMF_NONE)
                 {
@@ -1064,8 +1067,8 @@ bool SurfaceRouter::findAndTransferPocket(const set<EH>& boundaryEs,
             assert(currentHfs.find(frontHalfface ? tetMesh.opposite_halfface_handle(hfAdj) : hfAdj)
                    == currentHfs.end());
             if (currentHfs.count(frontHalfface ? hfAdj : tetMesh.opposite_halfface_handle(hfAdj)) == 0
-                &&!containsMatching(tetMesh.halfface_edges(hfAdj),
-                                    [&](const EH& e) { return currentEs.count(e) == 0; }))
+                && !containsMatching(tetMesh.halfface_edges(hfAdj),
+                                     [&](const EH& e) { return currentEs.count(e) == 0; }))
             {
                 pocketHf = hfAdj;
                 break;
@@ -1261,7 +1264,20 @@ SurfaceRouter::RetCode SurfaceRouter::exchangedElements(const CH& tet,
             bool fIsRemovedNotAdded = removedHfs.find(frontHalfface ? hf : hfOpp) != removedHfs.end();
             bool fNextIsRemovedNotAdded = removedHfs.find(frontHalfface ? hfNext : hfNextOpp) != removedHfs.end();
             if (fIsRemovedNotAdded && fNextIsRemovedNotAdded)
-                removedEs.insert(e);
+            {
+                bool remaining = false;
+                for (FH f : tetMesh.edge_faces(e))
+                    if (!removedHfs.count(tetMesh.halfface_handle(f, 0))
+                        && !removedHfs.count(tetMesh.halfface_handle(f, 1))
+                        && (currentHfs.count(tetMesh.halfface_handle(f, 0))
+                            || currentHfs.count(tetMesh.halfface_handle(f, 1))))
+                    {
+                        remaining = true;
+                        break;
+                    }
+                if (!remaining)
+                    removedEs.insert(e);
+            }
             else if (!fIsRemovedNotAdded && !fNextIsRemovedNotAdded)
                 addedEs.insert(e);
 
@@ -1291,7 +1307,19 @@ SurfaceRouter::RetCode SurfaceRouter::exchangedElements(const CH& tet,
             }
 
         if (removedNotAdded[0] && removedNotAdded[1] && removedNotAdded[2])
-            removedVs.insert(v);
+        {
+            bool remaining = false;
+            for (FH f : tetMesh.vertex_faces(v))
+                if (!removedHfs.count(tetMesh.halfface_handle(f, 0)) && !removedHfs.count(tetMesh.halfface_handle(f, 1))
+                    && (currentHfs.count(tetMesh.halfface_handle(f, 0))
+                        || currentHfs.count(tetMesh.halfface_handle(f, 1))))
+                {
+                    remaining = true;
+                    break;
+                }
+            if (!remaining)
+                removedVs.insert(v);
+        }
         else if (!removedNotAdded[0] && !removedNotAdded[1] && !removedNotAdded[2])
             addedVs.insert(v);
     }
@@ -1712,11 +1740,14 @@ void SurfaceRouter::getSurfaceBoundary(const set<HFH>& surface,
                 auto it2 = hesBoundary.find(tetMesh.opposite_halfedge_handle(he));
                 if (it2 == hesBoundary.end())
                 {
-                    LOG(ERROR) << "Non-manifold surface or inverse halffaces inside the surface";
-                    throw std::logic_error("");
+                    LOG(WARNING) << "Edge-Non-manifold surface or inverse halffaces inside the surface, might cause "
+                                    "errors later";
+                    // throw std::logic_error("");
                 }
-                assert(it2 != hesBoundary.end());
-                hesBoundary.erase(it2);
+                // assert(it2 != hesBoundary.end());
+                // hesBoundary.erase(it2);
+                hesBoundary.erase(tetMesh.opposite_halfedge_handle(he));
+                hesBoundary.erase(he);
                 esBoundary.erase(it);
             }
             else

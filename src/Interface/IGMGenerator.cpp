@@ -145,11 +145,11 @@ IGMGenerator::RetCode IGMGenerator::generateBlockwiseIGM(bool simplifyBaseMesh, 
         remesher.collapseAllPossibleEdges(false, true, true);
     else
         remesher.collapseAllPossibleEdges(true, true, true, true, 5);
+    init.minimizeCutSurface();
 
     if (retUntangling == IGMUntangler::NO_CONVERGENCE)
     {
         LOG(INFO) << "Some inverted tets remain in IGM in the following blocks:";
-        init.minimizeCutSurface();
         for (CH b : mcMeshProps().mesh().cells())
         {
             int nInvalidUVW = 0;

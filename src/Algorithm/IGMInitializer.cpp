@@ -289,14 +289,11 @@ void IGMInitializer::minimizeCutSurface()
         {
             HFH hpIn = mc.opposite_halfface_handle(hpOut);
             CH bNext = mc.incident_cell(hpIn);
-            if (bNext.is_valid() && bsVisited.count(bNext) == 0)
+            if (bNext.is_valid() && bsVisited.count(bNext) == 0 && mcMeshProps().hpTransition<PATCH_TRANSITION>(hpIn) == Transition())
             {
                 bsVisited.insert(bNext);
                 bQ.push_back(bNext);
                 Transition trans = mcMeshProps().hpTransition<PATCH_IGM_TRANSITION>(hpIn);
-                Transition transNoTranslation = trans;
-                transNoTranslation.translation = Vec3Q(0, 0, 0);
-                applyTransitionToBlock(transNoTranslation, bNext);
                 applyTransitionIGMToBlock(trans, bNext, false);
             }
         }

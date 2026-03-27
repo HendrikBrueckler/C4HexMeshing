@@ -146,6 +146,7 @@ class MCSmoother : public virtual MCMeshManipulator
 
     map<FH, set<CH>> _p2sector;    // To force patch reroutes to pass through a volume sector
     map<FH, set<HEH>> _p2boundary; // Store the original boundary cycle of a patch
+    map<pair<HFH, HEH>, HFH> _hpha2safeAdjacentHp; // cached halfpatch-in-cell adjacency, safe under self-adjacency
 };
 
 } // namespace c4hex

@@ -10,8 +10,10 @@
 
 #include <QGP3D/ConstraintExtractor.hpp>
 #include <QGP3D/ConstraintWriter.hpp>
+#include <QGP3D/IQP/IQPQuantizer.hpp>
 #include <QGP3D/ISP/ISPQuantizer.hpp>
-#include <QGP3D/SeparationChecker.hpp>
+#include <QGP3D/ObjectiveBuilder.hpp>
+#include <QGP3D/StructurePreserver.hpp>
 
 #include <C4Hex/Algorithm/MCCollapser.hpp>
 #include <C4Hex/Interface/HexRemesher.hpp>
@@ -24,6 +26,7 @@
 
 #include <CLI/CLI.hpp>
 
+#include <chrono>
 #include <iomanip>
 #include <string>
 
@@ -57,7 +60,7 @@ int main(int argc, char** argv)
     bool forceSanitization = false;
     bool doCollapse = false;
 
-    double scaling = 0.0;
+    double individualArcFactor = 0.01;
     std::string constraintFile = "";
     std::string outputIGMFile = "";
     int untanglingIter = 500;
@@ -71,6 +74,13 @@ int main(int argc, char** argv)
     int direction = 0;
 
     bool optimizeBaseMesh = false;
+
+    // 1st bit: 0 flexible / 1 fixed singularities
+    // 2nd bit: 0 distortion / 1 arcdeviation objective
+    // 3rd bit: 1 for singularity padding (only has effect when 1st bit is 0)
+    uint8_t variant = 0;
+
+    double nTargetHexes = 10000;
 
     auto optInput
         = app.add_option("--input", inputFile, "Specify the input mesh & seamless parametrization file.")->required();
@@ -104,20 +114,38 @@ int main(int argc, char** argv)
         "--output-igm-file", outputIGMFile, "Specify a file to generate an IGM from the quantization into (optional)");
     auto optOutput = app.add_option(
         "--output-hex-file", outputHexFile, "Specify a file to generate a hex mesh from the IGM into (optional)");
-    app.add_option("--scaling", scaling, "Set this double to affect relative quantization scaling");
+    // app.add_option("--scaling", scaling, "Set this double to affect relative quantization scaling");
+    app.add_option(
+        "--arc-factor", individualArcFactor, "Percent weight of individual arc lengths (vs critical path lengths)");
     app.add_option(
         "--untangling-iter", untanglingIter, "Number of IGM foldover-removal untangling iterations (default 500)");
     app.add_flag("--block-structured",
                  blockStructured,
                  "Whether to collapse first and then requantize to an estimated reasonable amount of hexes");
     app.add_option(
-        "--times-minimal", timesMinimalHexes, "By which factor to scale number of hexes for block structured");
+        "--times-minimal", timesMinimalHexes, "By which factor to scale the minimum number of hexes for block structured output");
     app.add_flag("--random-order", randomOrder, "Ordering of collapses");
     app.add_option("--collapse-direction", direction, "Direction of collapses");
     app.add_flag(
         "--optimize-base-mesh",
         optimizeBaseMesh,
         "Optimize the base mesh for IGM generation. More time consuming but better IGM quality and less inversions.");
+    app.add_option("--variant",
+                   variant,
+                   "Pick algorithm variant: \n"
+                   "1st bit: 0 flexible / 1 fixed singularities \n 2nd bit: 0 distortion / 1 arcdeviation objective \n "
+                   "3rd bit: 1 for singularity padding (only has effect when 1st bit is 0)");
+    app.add_option("--num-hexes", nTargetHexes, "Target number of hexes");
+#ifdef MC3D_WITH_VIEWER
+    bool useViewer = true;
+    app.add_flag("--use-viewer", useViewer, "Use viewer to visualize some steps of the pipeline. \n Close the viewer to let algorithm continue.");
+#endif
+#ifndef QGP3D_WITHOUT_IQP
+    int iqpTimeLimit = 180;
+    app.add_option("--iqp-time-limit",
+                   iqpTimeLimit,
+                   "Time limit for quantization IQP solvers in seconds. 0 disables use of IQP solvers.");
+#endif
 
     // Parse cli options
     try
@@ -129,18 +157,38 @@ int main(int argc, char** argv)
         return app.exit(e);
     }
 
-    scaling = std::max(scaling, 0.001);
     // Create base meshes and add property wrapper
     TetMesh meshRaw;
     MCMesh mcMeshRaw;
     TetMeshProps meshProps(meshRaw, mcMeshRaw);
 
+    meshProps.allocate<ALGO_VARIANT>(variant);
+    LOG(INFO) << "Running algorithm variant " << meshProps.get<ALGO_VARIANT>() << " with "
+              << (variant % 2 ? "fixed " : ("flexible " + variant / 4 % 2 ? "but padded " : "")) << "singularities"
+              << " and " << (variant / 2 % 2 ? "arc-length deviation " : "feature distortion ") << "objective";
     meshProps.allocate<TOUCHED>(true);
     Reader reader(meshProps, inputFile, forceSanitization);
     if (inputHasMCwalls)
         ASSERT_SUCCESS("Reading precomputed MC walls", reader.readSeamlessParamWithWalls());
     else
         ASSERT_SUCCESS("Reading seamless map", reader.readSeamlessParam());
+
+    double vol = 0;
+    for (CH tet : meshRaw.cells())
+        vol += reader.doubleVolumeUVW(tet);
+    double newScaling = std::max(0.001, std::cbrt(nTargetHexes / vol));
+
+    LOG(INFO) << "Scaling parametrization by factor " << newScaling << " to match target hex count";
+#ifdef MC3D_WITH_VIEWER
+    if (useViewer)
+    {
+        SingularityInitializer init(meshProps);
+        ASSERT_SUCCESS("Determining transitions", init.initTransitions());
+        ASSERT_SUCCESS("Determining singularities", init.initSingularities());
+        LOG(INFO) << "Visualizing scaled seamless parametrization (close viewer to continue)";
+        reader.visualizeParametrization<CHART>(newScaling);
+    }
+#endif
 
     MCGenerator mcgen(meshProps);
     if (!inputHasMCwalls)
@@ -215,6 +263,9 @@ int main(int argc, char** argv)
         }
 
         ASSERT_SUCCESS("Connecting the MC", builder.connectMCMesh(true, splitSelfadjacent || doCollapse));
+        LOG(INFO) << "The MC has " << mcMeshRaw.n_logical_vertices() << " nodes, " << mcMeshRaw.n_logical_edges()
+                  << " arcs, " << mcMeshRaw.n_logical_faces() << " patches and " << mcMeshRaw.n_logical_cells()
+                  << " blocks";
 
         MCMeshNavigator(meshProps).assertValidMC(true, true);
         if (!simulateBC)
@@ -229,7 +280,13 @@ int main(int argc, char** argv)
     {
         LOG(INFO) << "Derefining the base mesh after MC computation...";
         meshProps.allocate<TOUCHED>(true);
-        remesher.collapseAllPossibleEdges(true, true, false, false);
+        remesher.collapseAllPossibleEdges(true, true, true, false);
+        if (optimizeBaseMesh)
+        {
+            LOG(INFO) << "Optimizing the base mesh before MC collapsing...";
+            meshProps.allocate<TOUCHED>(true);
+            remesher.collapseAllPossibleEdges(false, true, true, true, 10);
+        }
     }
 
     if (!wallsFile.empty())
@@ -243,32 +300,34 @@ int main(int argc, char** argv)
     else if (constraintFile.empty())
         lowerBound = 1;
 
-    double newScaling = scaling;
     int minimalHexes = 1;
     if (!constraintFile.empty() || doCollapse || !outputIGMFile.empty() || !outputHexFile.empty())
     {
+        ObjectiveBuilder builder(meshProps);
         {
-            SeparationChecker sep(meshProps);
-            ASSERT_SUCCESS("Quantization", ISPQuantizer(meshProps, sep).quantize(0.0001, lowerBound));
-            minimalHexes = sep.numHexesInQuantization();
-            vector<double> aLengths;
-            for (auto a : mcMeshRaw.edges())
-                aLengths.emplace_back(meshProps.get<MC_MESH_PROPS>()->get<ARC_DBL_LENGTH>(a));
-            std::sort(aLengths.begin(), aLengths.end());
-            double percentileArcLength = aLengths.at(
-                std::max(0lu, std::min(aLengths.size() - 1, (size_t)(aLengths.size() * (1.0 - scaling)))));
-            newScaling = 0.4 / percentileArcLength;
-            LOG(INFO) << "To keep " << scaling * 100 << "% of arcs above length 0.5, a scaling factor of " << newScaling
-                      << " for collapsing was chosen";
+            if (blockStructured)
+            {
+                StructurePreserver sep(meshProps);
+                QuadraticObjective coarsestObjective = builder.simplifiedDistortionObjective(0.001, 0.01);
+                ASSERT_SUCCESS("IQP Quantization",
+                               IQPQuantizer(meshProps, sep, coarsestObjective).quantize(lowerBound, 60));
+                minimalHexes = sep.numHexesInQuantization();
+                meshProps.get<MC_MESH_PROPS>()->release<ARC_INT_LENGTH>();
+            }
+            {
+                QuadraticObjective obj
+                    = ((variant / 2) % 2)
+                          ? ObjectiveBuilder(meshProps).arcLengthDeviationObjective(newScaling)
+                          : ObjectiveBuilder(meshProps).simplifiedDistortionObjective(newScaling, individualArcFactor);
+                StructurePreserver sep(meshProps);
+                ASSERT_SUCCESS("Quantization (ISP initialize)", ISPQuantizer(meshProps, sep, obj).quantize(0.0));
+#ifndef QGP3D_WITHOUT_IQP
+                if (iqpTimeLimit > 0)
+                    ASSERT_SUCCESS("Quantization (IQP improve)",
+                                   IQPQuantizer(meshProps, sep, obj).quantize(0.0, iqpTimeLimit));
+#endif
+            }
         }
-        SeparationChecker sep(meshProps);
-        ASSERT_SUCCESS("Quantization", ISPQuantizer(meshProps, sep).quantize(newScaling, lowerBound));
-        if (doCollapse && !MCCollapser(meshProps).hasZeroLengthArcs())
-        {
-            LOG(INFO) << "No 0-arcs, nothing to collapse, exiting...";
-            return 0;
-        }
-        MCCollapser(meshProps).markZeros();
     }
 
     if (doCollapse)
@@ -279,88 +338,98 @@ int main(int argc, char** argv)
             meshProps.allocate<TOUCHED>(true);
             remesher.collapseAllPossibleEdges(false, true, true, true, 10);
         }
-        ASSERT_SUCCESS("Collapsing 0-arcs",
-                       MCCollapser(meshProps).collapseAllZeroElements(optimizeBaseMesh, randomOrder, direction));
-        if (blockStructured)
+#ifdef MC3D_WITH_VIEWER
+        if (useViewer)
+            ASSERT_SUCCESS("Collapsing 0-arcs interactively (close viewer to continue automatically)",
+                           MCCollapser(meshProps).interactiveViewCollapse(optimizeBaseMesh, randomOrder, direction));
+        else
+#endif
+            ASSERT_SUCCESS("Collapsing 0-arcs",
+                           MCCollapser(meshProps).collapseAllZeroElements(optimizeBaseMesh, randomOrder, direction));
+        if (blockStructured && timesMinimalHexes >= 1)
         {
             Q paramVol = 0;
             for (CH tet : meshRaw.cells())
                 paramVol += mcgen.rationalVolumeUVW(tet);
             double optimalScaling = std::pow(timesMinimalHexes * minimalHexes / paramVol.get_d(), 1.0 / 3);
 
-            SeparationChecker sep(meshProps);
-            ASSERT_SUCCESS("Quantization block structured", ISPQuantizer(meshProps, sep).quantize(optimalScaling, 1.0));
+            for (EH a : mcMeshRaw.edges())
+            {
+                double length = 0.0;
+                for (HEH he : meshProps.get<MC_MESH_PROPS>()->ref<ARC_MESH_HALFEDGES>(a))
+                    length += reader.edgeLengthUVW<CHART>(meshRaw.edge_handle(he));
+                meshProps.get<MC_MESH_PROPS>()->set<ARC_DBL_LENGTH>(a, length);
+            }
+            meshProps.get<MC_MESH_PROPS>()->release<ARC_INT_LENGTH>();
+            meshProps.set<ALGO_VARIANT>(3);
+            StructurePreserver sep(meshProps);
+            ObjectiveBuilder builder(meshProps);
+            QuadraticObjective obj = builder.arcLengthDeviationObjective(optimalScaling);
+            ASSERT_SUCCESS("Quantization block structured", IQPQuantizer(meshProps, sep, obj).quantize(1.0, 120));
         }
     }
     else if (!constraintFile.empty())
         ASSERT_SUCCESS("Writing constraints", ConstraintWriter(meshProps, constraintFile).writeTetPathConstraints());
 
-    if (!outputIGMFile.empty() || !outputHexFile.empty())
+    // if (!outputIGMFile.empty() || !outputHexFile.empty())
     {
         IGMGenerator igmgen(meshProps);
         LOG(INFO) << "Generating IGM...";
-        auto ret = igmgen.generateBlockwiseIGM(optimizeBaseMesh, untanglingIter, 40);
+        auto ret = igmgen.generateBlockwiseIGM(optimizeBaseMesh, untanglingIter, 8);
         if (ret == IGMGenerator::SUCCESS)
             LOG(INFO) << "Generating IGM was successful";
         else if (ret == IGMGenerator::NO_CONVERGENCE)
             LOG(INFO) << "Generated IGM has some inversions";
         else
-            LOG(ERROR) << "Generating IGM failed with error code " << ret << ", aborting...";
+            LOG(ERROR) << "Generating IGM failed with error code " << ret;
+        std::string success = (ret == IGMGenerator::SUCCESS) ? "_clean" : "_dirty";
+
+#ifdef MC3D_WITH_VIEWER
+        if (useViewer)
+        {
+            LOG(INFO) << "Visualizing output IGM (without further distortion optimization!)";
+            LOG(INFO) << "Close viewer to continue";
+            igmgen.visualizeParametrization<CHART_IGM>();
+        }
+#endif
 
         if (!outputIGMFile.empty())
         {
-            // remesher.remeshToImproveAngles(true, true, TetMeshManipulator::QualityMeasure::VL_RATIO);
-            ASSERT_SUCCESS("Writing IGM", Writer(meshProps, outputIGMFile + "_exact.igm", true).writeIGMAndWalls());
-            ASSERT_SUCCESS("Writing IGM", Writer(meshProps, outputIGMFile + ".igm", false).writeIGM());
+            ASSERT_SUCCESS("Writing IGM in exact rational numbers",
+                           Writer(meshProps,
+                                  outputIGMFile + "_" + std::to_string(timesMinimalHexes) + success + "_exact.igm",
+                                  true)
+                               .writeIGMAndWalls());
+            ASSERT_SUCCESS(
+                "Writing IGM in double precision",
+                Writer(meshProps, outputIGMFile + "_" + std::to_string(timesMinimalHexes) + success + ".igm", false)
+                    .writeIGM());
         }
 
-        if (!outputHexFile.empty())
         {
-            int nHexes = SeparationChecker(meshProps).numHexesInQuantization();
-            int nsub = 0;
-            if (nHexes > 100000)
-                nsub = 2;
-            else if (nHexes > 10000)
-                nsub = 3;
-            else if (nHexes > 5000)
-                nsub = 4;
-            else if (nHexes > 1000)
-                nsub = 5;
-            else if (nHexes > 500)
-                nsub = 6;
-            else
-                nsub = 10;
+            size_t nHexes = StructurePreserver(meshProps).numHexesInQuantization();
 
-            int nSmooth = 0;
+            int nSmooth = 1;
             if (nHexes > 10000)
-                nSmooth = 3;
+                nSmooth = 10;
             else if (nHexes > 1000)
-                nSmooth = 2;
+                nSmooth = 5;
             else if (nHexes > 50)
-                nSmooth = 1;
+                nSmooth = 2;
 
             HexRemesher hexer(meshProps);
-            {
-                PolyMesh polyMCMesh;
-                PolyMeshProps polyMCMeshProps(polyMCMesh);
-                ASSERT_SUCCESS("Extracting MC mesh", hexer.extractMCMesh(polyMCMeshProps));
-                ASSERT_SUCCESS("Writing MC mesh", hexer.writePolyHexMesh(polyMCMeshProps, outputHexFile + "_MC.ovm"));
-            }
-
-            {
-                HexMesh hexMeshRaw;
-                HexMeshProps hexMeshProps(hexMeshRaw);
-                ASSERT_SUCCESS("Extracting hex mesh", hexer.extractHexMesh(hexMeshProps));
-                ASSERT_SUCCESS("Smoothing hex mesh", hexer.smoothSurface(hexMeshProps, 0));
-                ASSERT_SUCCESS("Writing hex mesh", hexer.writeHexMesh(hexMeshProps, outputHexFile + "_hex.ovm"));
-            }
-
-            PolyMesh polyHexMesh;
-            PolyMeshProps polyMeshProps(polyHexMesh);
-
-            ASSERT_SUCCESS("Extracting poly hex mesh", hexer.extractPolyHexMesh(polyMeshProps, nsub));
-            ASSERT_SUCCESS("Smoothing poly hex mesh", hexer.smoothSurface(polyMeshProps, nSmooth));
-            ASSERT_SUCCESS("Writing poly hex mesh", hexer.writePolyHexMesh(polyMeshProps, outputHexFile + "_poly.ovm"));
+            HexMesh hexMeshRaw;
+            HexMeshProps hexMeshProps(hexMeshRaw);
+            ASSERT_SUCCESS("Extracting hex mesh", hexer.extractHexMesh(hexMeshProps));
+            ASSERT_SUCCESS("Smoothing hex mesh (preserves features, projects back to boundary)",
+                           hexer.smooth(hexMeshProps, nSmooth));
+            if (!outputHexFile.empty())
+                ASSERT_SUCCESS("Writing hex mesh",
+                               hexer.writeHexMesh(
+                                   hexMeshProps, outputHexFile + "_" + std::to_string(timesMinimalHexes) + "_hex.ovm"));
+#ifdef MC3D_WITH_VIEWER
+            hexer.viewHexMesh(hexMeshProps);
+#endif
         }
     }
 

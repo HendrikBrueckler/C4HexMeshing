@@ -4,7 +4,6 @@
 #include <fstream>
 #include <queue>
 
-
 namespace c4hex
 {
 
@@ -580,14 +579,13 @@ PathRouter::RetCode PathRouter::getEnclosedHalffaces(const list<list<HEH>>& bran
     SurfaceRouter sr(meshProps());
     hfsEnclosed.clear();
     for (auto itPath = branchesPath.begin(), itRerouted = branchesPathRerouted.begin();
-            itPath != branchesPath.end() && itRerouted != branchesPathRerouted.end();
-            itPath++, itRerouted++)
+         itPath != branchesPath.end() && itRerouted != branchesPathRerouted.end();
+         itPath++, itRerouted++)
     {
         auto& branchPath = *itPath;
         auto& branchRerouted = *itRerouted;
         assert(tetMesh.to_vertex_handle(branchPath.back()) == tetMesh.to_vertex_handle(branchRerouted.back()));
-        assert(tetMesh.from_vertex_handle(branchPath.front())
-                == tetMesh.from_vertex_handle(branchRerouted.front()));
+        assert(tetMesh.from_vertex_handle(branchPath.front()) == tetMesh.from_vertex_handle(branchRerouted.front()));
         set<HEH> boundaryHes(branchPath.begin(), branchPath.end());
         for (HEH he : branchRerouted)
             boundaryHes.insert(tetMesh.opposite_halfedge_handle(he));
@@ -745,6 +743,11 @@ PathRouter::aStarShortestPath(const VH& vFrom, const VH& vTo, list<HEH>& path, s
                           0
 #endif
                               )});
+    if (!allowedVs.count(vFrom) || !allowedVs.count(vTo))
+    {
+        LOG(ERROR) << "looks like patch surface in which to reroute arc is not connected to endpoint vertices";
+        return NOT_CONNECTED;
+    }
 
     map<VH, std::pair<double, HEH>> v2minDistAndHe;
     for (VH v : allowedVs)
@@ -770,7 +773,8 @@ PathRouter::aStarShortestPath(const VH& vFrom, const VH& vTo, list<HEH>& path, s
             VH vNext = tetMesh.to_vertex_handle(he);
             auto itMinDist = v2minDistAndHe.find(vNext);
             if (itMinDist == v2minDistAndHe.end() || vsExpanded.find(vNext) != vsExpanded.end()
-                || allowedEs.count(tetMesh.edge_handle(he)) == 0 || esVisited.count(tetMesh.edge_handle(he)) != 0)
+                || allowedEs.count(tetMesh.edge_handle(he)) == 0 || allowedVs.count(tetMesh.to_vertex_handle(he)) == 0
+                || esVisited.count(tetMesh.edge_handle(he)) != 0)
                 continue;
 
             double heLength =
@@ -825,10 +829,28 @@ PathRouter::RetCode PathRouter::reroutePathThroughPatch(const FH& p, list<HEH>& 
 
     auto& tetMesh = meshProps().mesh();
     auto& mcMesh = mcMeshProps().mesh();
+
     VH vFrom = tetMesh.from_vertex_handle(path.front());
     VH vTo = tetMesh.to_vertex_handle(path.back());
-    if (vFrom == vTo)
-        LOG(WARNING) << "WARNING: Trying to reroute path between identical from/to vertex, this probably does not work";
+
+    bool multipleOccurence = false;
+    {
+        set<VH> vs;
+        for (HEH he : path)
+        {
+            VH v = tetMesh.from_vertex_handle(he);
+            if (vs.count(v))
+            {
+                multipleOccurence = true;
+                break;
+            }
+        }
+        if (vs.count(vTo))
+            multipleOccurence = true;
+        if (multipleOccurence)
+            LOG(WARNING) << "WARNING: Trying to reroute path within selfadjacent patch, shortest path disabled, using "
+                            "incremental shift";
+    }
     _p = p;
     auto& pHfs = mcMeshProps().ref<PATCH_MESH_HALFFACES>(p);
 
@@ -837,6 +859,7 @@ PathRouter::RetCode PathRouter::reroutePathThroughPatch(const FH& p, list<HEH>& 
     set<FH> forbiddenFs;
     (void)mcMesh;
     // First try minimal path
+    if (!multipleOccurence)
     {
         assert(!path.empty());
         assert(!pHfs.empty());
@@ -870,11 +893,11 @@ PathRouter::RetCode PathRouter::reroutePathThroughPatch(const FH& p, list<HEH>& 
             for (HEH he : pathRerouted)
                 boundary.insert(tetMesh.edge_handle(he));
 
-            HFH hfSeed = findMatching(tetMesh.halfedge_halffaces(forbiddenFront ? path.front()
-                                                                    : tetMesh.opposite_halfedge_handle(path.back())),
+            HFH hfSeed = findMatching(
+                tetMesh.halfedge_halffaces(forbiddenFront ? path.front()
+                                                          : tetMesh.opposite_halfedge_handle(path.back())),
 
-                         [&, this](const HFH& hf) { return meshProps().get<MC_PATCH>(tetMesh.face_handle(hf)) == p; }
-                                                                    );
+                [&, this](const HFH& hf) { return meshProps().get<MC_PATCH>(tetMesh.face_handle(hf)) == p; });
             _inFirstHp = pHfs.find(hfSeed) != pHfs.end();
             if (!_inFirstHp)
                 hfSeed = tetMesh.opposite_halfface_handle(hfSeed);
@@ -950,9 +973,9 @@ PathRouter::RetCode PathRouter::reroutePathThroughPatch(const FH& p, list<HEH>& 
         }
 
         // Determine shift/flip direction
-        _inFirstHp =  pHfs.count(findMatching(
-                         tetMesh.halfedge_halffaces(pathRerouted.front()),
-                         [&, this](const HFH& hf) { return meshProps().get<MC_PATCH>(tetMesh.face_handle(hf)) == p; }))
+        _inFirstHp = pHfs.count(findMatching(tetMesh.halfedge_halffaces(pathRerouted.front()),
+                                             [&, this](const HFH& hf)
+                                             { return meshProps().get<MC_PATCH>(tetMesh.face_handle(hf)) == p; }))
                      != 0;
 
         bool change = true;

@@ -44,6 +44,17 @@ class MCCollapser : public virtual MCMeshManipulator
     RetCode collapseAllZeroElements(bool optimize = false, bool randomOrder = false, int direction = 0);
 
     /**
+     * @brief Interactive collapsing with viewer (only if compiled with viewer support, otherwise calls
+     *        \ref collapseAllZeroElements)
+     *
+     * @param optimize IN: whether to smooth the resulting MC afterwards
+     * @param randomOrder IN: which order of collapses (random or smalles elements first)
+     * @param direction IN: direction of collapses (0: globally coordinated, 1: random, 2: from min valence)
+     * @return RetCode SUCCESS or error code
+     */
+    RetCode interactiveViewCollapse(bool optimize = false, bool randomOrder = false, int direction = 0);
+
+    /**
      * @brief Count the number of zero elements according to the underlying quantization
      *
      * @param numZeroAs OUT: number of zero-arcs
@@ -86,6 +97,15 @@ class MCCollapser : public virtual MCMeshManipulator
     bool collapseIsLocked(const HEH& ha) const;
 
     /**
+     * @brief Whether the intended halfarc collapse would move a singular link
+     *
+     * @param ha IN: halfarc to collapse
+     * @return true if singularitiy would by moved
+     * @return false otherwise
+     */
+    bool collapseMovesSingularity(const HEH& ha) const;
+
+    /**
      * @brief Get the preferred collapse direction of \p a
      *
      * @param a IN: zero-arc
@@ -99,7 +119,7 @@ class MCCollapser : public virtual MCMeshManipulator
      * @param haMoving IN: any halfedge of collapse patch, OUT: moving side of patch
      * @param haStationary IN: other halfedge of collapse patch, OUT: stationary side of patch
      */
-    void determineStationaryEnd(HEH& haMoving, HEH& haStationary) const;
+    void determineStationaryEnd(const FH& pCollapse, HEH& haMoving, HEH& haStationary) const;
 
     /**
      * @brief Determine the stationary side of a pillow block collapse
@@ -264,6 +284,7 @@ class MCCollapser : public virtual MCMeshManipulator
 
     bool _randomOrder = false; // Whether to execute collapses in random order
     int _direction = 0;        // Directedness of collapse process
+
 };
 
 } // namespace c4hex

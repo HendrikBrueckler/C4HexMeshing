@@ -50,6 +50,12 @@ void MCSmoother::smoothMC()
     TemporaryPropAllocator<TetMeshProps, CHILD_CELLS, CHILD_FACES, CHILD_EDGES, CHILD_HALFFACES, CHILD_HALFEDGES>
         propGuard(meshProps());
 
+    _hpha2safeAdjacentHp.clear();
+    for (HFH hp : mcMesh.halffaces())
+        if (!mcMesh.is_boundary(hp))
+            for (HEH ha : mcMesh.halfface_halfedges(hp))
+                _hpha2safeAdjacentHp[{hp, ha}] = safeAdjacentHalffaceInBlock(hp, ha);
+
     set<FH> psOptimized;
     list<EH> as;
     for (EH a : mcMesh.edges())
@@ -62,7 +68,7 @@ void MCSmoother::smoothMC()
         as.pop_front();
         asOnQ.erase(a);
 
-        if (a2timesOptimized[a] >= 3 || mcMeshProps().get<IS_SINGULAR>(a)
+        if (a2timesOptimized[a] >= 3 || (mcMeshProps().isAllocated<IS_CRITICAL_A>() && mcMeshProps().get<IS_CRITICAL_A>(a))
             || (mcMeshProps().isAllocated<IS_FEATURE_E>() && mcMeshProps().get<IS_FEATURE_E>(a))
             || (!mcMesh.is_boundary(a) && mcMeshProps().isAllocated<IS_FEATURE_F>()
                 && containsMatching(mcMesh.edge_faces(a),
@@ -100,10 +106,8 @@ void MCSmoother::smoothMC()
             continue;
         }
         map<FH, set<HFH>> p2hfs;
-        map<FH, Transition> p2trans;
         for (FH p : mcMesh.edge_faces(a))
         {
-            p2trans[p] = mcMeshProps().ref<PATCH_TRANSITION>(p);
             p2hfs[p] = mcMeshProps().ref<PATCH_MESH_HALFFACES>(p);
         }
 
@@ -113,8 +117,8 @@ void MCSmoother::smoothMC()
         // for all ordered patches p incident on a (circulating around a)
         for (FH p : psToReroute)
         {
-            if (mcMeshProps().isAllocated<IS_FEATURE_F>() && mcMeshProps().get<IS_FEATURE_F>(p)
-                && !mcMesh.is_boundary(p))
+            if ((mcMeshProps().isAllocated<IS_FEATURE_F>() && mcMeshProps().get<IS_FEATURE_F>(p)
+                && !mcMesh.is_boundary(p)) || _patchesRerouted.count(p))
                 continue;
             DLOG(INFO) << "Smoothing patch " << p;
             ret = reroute(p);
@@ -127,7 +131,7 @@ void MCSmoother::smoothMC()
         {
             updateArcEmbedding(a, hesA);
             for (auto& kv : p2hfs)
-                updatePatchEmbedding(kv.first, kv.second, &p2trans.at(kv.first));
+                updatePatchEmbedding(kv.first, kv.second);
             assertValidMC(true, true);
             continue;
         }
@@ -145,7 +149,7 @@ void MCSmoother::smoothMC()
         {
             updateArcEmbedding(a, hesA);
             for (auto& kv : p2hfs)
-                updatePatchEmbedding(kv.first, kv.second, &p2trans.at(kv.first));
+                updatePatchEmbedding(kv.first, kv.second);
             refloodFillBlocks();
             assertValidMC(false, false);
             continue;
@@ -180,7 +184,7 @@ void MCSmoother::smoothMC()
         _aReroute = EH(-1);
         for (auto a : mcMesh.face_edges(p))
         {
-            if (a2timesOptimized[a] >= 3 || mcMeshProps().get<IS_SINGULAR>(a)
+            if (a2timesOptimized[a] >= 3 || (mcMeshProps().isAllocated<IS_CRITICAL_A>() && mcMeshProps().get<IS_CRITICAL_A>(a))
                 || (mcMeshProps().isAllocated<IS_FEATURE_E>() && mcMeshProps().get<IS_FEATURE_E>(a))
                 || (!mcMesh.is_boundary(a) && mcMeshProps().isAllocated<IS_FEATURE_F>()
                     && containsMatching(mcMesh.edge_faces(a),
@@ -206,10 +210,8 @@ void MCSmoother::smoothMC()
             continue;
         }
         map<FH, set<HFH>> p2hfs;
-        map<FH, Transition> p2trans;
         for (FH p2 : mcMesh.edge_faces(a))
         {
-            p2trans[p2] = mcMeshProps().ref<PATCH_TRANSITION>(p2);
             p2hfs[p2] = mcMeshProps().ref<PATCH_MESH_HALFFACES>(p2);
         }
 
@@ -219,8 +221,8 @@ void MCSmoother::smoothMC()
         // for all ordered patches p incident on a (circulating around a)
         for (FH p2 : psToReroute)
         {
-            if (mcMeshProps().isAllocated<IS_FEATURE_F>() && mcMeshProps().get<IS_FEATURE_F>(p)
-                && !mcMesh.is_boundary(p2))
+            if ((mcMeshProps().isAllocated<IS_FEATURE_F>() && mcMeshProps().get<IS_FEATURE_F>(p)
+                && !mcMesh.is_boundary(p2)) || _patchesRerouted.count(p))
                 continue;
             LOG(INFO) << "Smoothing patch " << p2;
             ret = reroute(p2);
@@ -234,7 +236,7 @@ void MCSmoother::smoothMC()
         {
             updateArcEmbedding(a, hesA);
             for (auto& kv : p2hfs)
-                updatePatchEmbedding(kv.first, kv.second, &p2trans.at(kv.first));
+                updatePatchEmbedding(kv.first, kv.second);
             assertValidMC(true, true);
             continue;
         }
@@ -252,7 +254,7 @@ void MCSmoother::smoothMC()
         {
             updateArcEmbedding(a, hesA);
             for (auto& kv : p2hfs)
-                updatePatchEmbedding(kv.first, kv.second, &p2trans.at(kv.first));
+                updatePatchEmbedding(kv.first, kv.second);
             refloodFillBlocks();
             assertValidMC(true, true);
             continue;
@@ -602,7 +604,7 @@ list<FH> MCSmoother::cyclicOrderPatches(const HFH& hp, const EH& aReroute) const
         else
             front = !front;
         (front ? hpFront : hpBack) = mcMesh.opposite_halfface_handle(
-            mcMesh.adjacent_halfface_in_cell((front ? hpFront : hpBack), (front ? haFront : haBack)));
+            _hpha2safeAdjacentHp.at({front ? hpFront : hpBack, front ? haFront : haBack}));
         ps.push_back(mcMesh.face_handle(front ? hpFront : hpBack));
     }
     return ps;
@@ -671,7 +673,7 @@ MCSmoother::RetCode MCSmoother::refloodFillBlocks()
             }
         }
 
-        makeVolumeTransitionFree(newBlockTets, tetSeed);
+        // makeVolumeTransitionFree(newBlockTets, tetSeed);
         mcMeshProps().set<BLOCK_MESH_TETS>(b, newBlockTets);
         for (CH tet : newBlockTets)
             if (tetMesh.is_deleted(tet))
@@ -682,24 +684,6 @@ MCSmoother::RetCode MCSmoother::refloodFillBlocks()
             meshProps().set<MC_BLOCK>(tet, b);
         }
     }
-    for (CH b : _blocksChanged)
-        for (HFH hp : mcMesh.cell_halffaces(b))
-            mcMeshProps().setHpTransition<PATCH_TRANSITION>(
-                hp, meshProps().hfTransition<TRANSITION>(*mcMeshProps().hpHalffaces(hp).begin()));
-
-    for (CH b : _blocksChanged)
-        for (HFH hp : mcMesh.cell_halffaces(b))
-        {
-            Transition trans = mcMeshProps().hpTransition<PATCH_TRANSITION>(hp);
-            for (HFH hf : mcMeshProps().hpHalffaces(hp))
-            {
-                if (!(meshProps().hfTransition<TRANSITION>(hf) == trans))
-                {
-                    LOG(ERROR) << "Floodfilling block failed, because transition doesnt match";
-                    return REROUTE_ERROR;
-                }
-            }
-        }
     return SUCCESS;
 }
 
@@ -713,7 +697,7 @@ MCSmoother::RetCode MCSmoother::reroute(const EH& a, bool* change)
     auto& tetMesh = meshProps().mesh();
 
     bool aIsBoundary = mcMesh.is_boundary(a);
-    bool aIsSingular = mcMeshProps().get<IS_SINGULAR>(a);
+    bool aIsCritical = (mcMeshProps().isAllocated<IS_CRITICAL_A>() && mcMeshProps().get<IS_CRITICAL_A>(a));
 
     auto oldHes = mcMeshProps().get<ARC_MESH_HALFEDGES>(a);
 
@@ -723,8 +707,8 @@ MCSmoother::RetCode MCSmoother::reroute(const EH& a, bool* change)
     VH vTo = tetMesh.to_vertex_handle(pathRerouted.back());
     // Force to keep first halfedge at non-shifted end
 
-    // Reroute only if not singular (if singular, just keep the path resulting after appending)
-    if (!aIsSingular)
+    // Reroute only if not critical (if critical, just keep the path resulting after appending)
+    if (!aIsCritical)
     {
         // allowedVolumeArc = aIsBoundary ? allowedVolume : boundaryFaces of allowedVolume
         if (aIsBoundary)
@@ -858,7 +842,7 @@ MCSmoother::RetCode MCSmoother::reroute(const EH& a, bool* change)
 
     pathRerouted = pathRerouted;
 
-    if (!aIsSingular)
+    if (!aIsCritical)
         for (HEH he : pathRerouted)
         {
             if (_forbiddenEs.count(tetMesh.edge_handle(he)) != 0)
@@ -1082,7 +1066,7 @@ MCSmoother::RetCode MCSmoother::reroute(const FH& p)
     for (HFH hf : newPatchHalffaces)
     {
         FH p2 = meshProps().get<MC_PATCH>(tetMesh.face_handle(hf));
-        if (p2.is_valid() && _patchesRerouted.count(p2) != 0)
+        if (p2.is_valid() && p2 != p && _patchesRerouted.count(p2) != 0)
         {
             LOG(ERROR) << "Patch " + std::to_string(p.idx()) + " rerouted onto an already rerouted patch "
                               + std::to_string(p2.idx());
@@ -1140,6 +1124,7 @@ void MCSmoother::updateArcEmbedding(const EH& a, list<HEH>& hesA)
 
 void MCSmoother::updatePatchEmbedding(const FH& p, set<HFH>& hfsP, Transition* transP)
 {
+    (void)transP;
     auto& tetMesh = meshProps().mesh();
 
     meshProps().replaceByChildren(hfsP);
@@ -1149,8 +1134,6 @@ void MCSmoother::updatePatchEmbedding(const FH& p, set<HFH>& hfsP, Transition* t
         {
             meshProps().reset<MC_PATCH>(tetMesh.face_handle(hf));
             meshProps().reset<IS_WALL>(tetMesh.face_handle(hf));
-            if (transP != nullptr)
-                meshProps().reset<TRANSITION>(tetMesh.face_handle(hf));
         }
     }
     mcMeshProps().set<PATCH_MESH_HALFFACES>(p, hfsP);
@@ -1158,8 +1141,6 @@ void MCSmoother::updatePatchEmbedding(const FH& p, set<HFH>& hfsP, Transition* t
     {
         meshProps().set<MC_PATCH>(tetMesh.face_handle(hf), p);
         meshProps().set<IS_WALL>(tetMesh.face_handle(hf), true);
-        if (transP != nullptr)
-            meshProps().setTransition<TRANSITION>(hf, *transP);
     }
 }
 

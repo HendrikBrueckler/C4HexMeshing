@@ -24,7 +24,7 @@ typename HexExtractor<MESHPROPS>::RetCode HexExtractor<MESHPROPS>::HexExtractor:
     _hexMeshProps.template allocate<MC_ARC_ID>(-1);
     _hexMeshProps.template allocate<MC_PATCH_ID>(-1);
     _hexMeshProps.template allocate<MC_BLOCK_ID>(-1);
-    _hexMeshProps.template allocate<IS_SINGULAR>(false);
+    _hexMeshProps.template allocate<IS_SINGULAR>(0);
     _hexMeshProps.template allocate<IS_FEATURE_F>(0);
     _hexMeshProps.template allocate<IS_FEATURE_E>(0);
     _hexMeshProps.template allocate<IS_FEATURE_V>(0);
@@ -147,7 +147,7 @@ map<EH, vector<VH>> HexExtractor<MESHPROPS>::createArcHexVE(const map<VH, VH>& n
             if (mcMeshProps().isAllocated<IS_FEATURE_E>())
                 _hexMeshProps.template set<IS_FEATURE_E>(e, mcMeshProps().get<IS_FEATURE_E>(a));
             if (mcMeshProps().isAllocated<IS_SINGULAR>() && mcMeshProps().get<IS_SINGULAR>(a))
-                _hexMeshProps.template set<IS_SINGULAR>(e, true);
+                _hexMeshProps.template set<IS_SINGULAR>(e, mcMeshProps().get<IS_SINGULAR>(a));
             if (mcMeshProps().isAllocated<MARK_A>())
                 _hexMeshProps.template set<MARK_A>(e, mcMeshProps().get<MARK_A>(a));
             _hexMeshProps.template set<MC_ARC_ID>(e, a.idx());
