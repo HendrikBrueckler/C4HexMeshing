@@ -8,7 +8,7 @@
 #include <iomanip>
 
 #ifdef MC3D_WITH_VIEWER
-#include <settings/AppState.h>
+#include <polyhydra/settings/AppState.h>
 #include <polyhydra/polyhydra.h>
 #endif
 

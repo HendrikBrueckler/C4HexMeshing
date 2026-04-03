@@ -18,8 +18,8 @@
 #include <QGP3D/ObjectiveBuilder.hpp>
 #include <QGP3D/StructurePreserver.hpp>
 #include <misc/cpp/imgui_stdlib.h>
-#include <settings/AppState.h>
-#include <util/ImGuiUtil.h>
+#include <polyhydra/settings/AppState.h>
+#include <polyhydra/util/ImGuiUtil.h>
 #include <polyhydra/polyhydra.h>
 #endif
 
