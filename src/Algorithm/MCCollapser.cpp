@@ -20,7 +20,7 @@
 #include <misc/cpp/imgui_stdlib.h>
 #include <settings/AppState.h>
 #include <util/ImGuiUtil.h>
-#include <volumeshOS.h>
+#include <polyhydra/polyhydra.h>
 #endif
 
 namespace c4hex
@@ -422,7 +422,7 @@ MCCollapser::RetCode MCCollapser::interactiveViewCollapse(bool optimize, bool ra
 
     markZeros();
     setZeroColors();
-    volumeshOS::VMesh mesh;
+    polyhydra::VMesh mesh;
     auto updateVMesh = [&, this](bool onlyColors = false)
     {
         if (!onlyColors)
@@ -430,17 +430,17 @@ MCCollapser::RetCode MCCollapser::interactiveViewCollapse(bool optimize, bool ra
             if (!mesh.is_valid())
             {
                 LOG(INFO) << "loading vismesh";
-                mesh = volumeshOS::load(&tetMesh);
-                volumeshOS::Internal::AppState::settings.camera.position = {3.8, 7.5, 20.0};
-                volumeshOS::Internal::AppState::settings.camera.mode = volumeshOS::CameraMode::FLY;
-                volumeshOS::set_camera_mode(volumeshOS::CameraMode::FLY);
-                volumeshOS::set_camera_position(3.8, 7.5, 20.0);
+                mesh = polyhydra::load(&tetMesh);
+                polyhydra::Internal::AppState::settings.camera.position = {3.8, 7.5, 20.0};
+                polyhydra::Internal::AppState::settings.camera.mode = polyhydra::CameraMode::FLY;
+                polyhydra::set_camera_mode(polyhydra::CameraMode::FLY);
+                polyhydra::set_camera_position(3.8, 7.5, 20.0);
 
                 mesh.set_cell_rounding(0.0);
                 mesh.set_scale(1.00);
                 mesh.use_base_color(false);
-                mesh.set_lighting_mode(volumeshOS::LightingMode::PHONG);
-                mesh.set_shading_mode(volumeshOS::ShadingMode::FLAT);
+                mesh.set_lighting_mode(polyhydra::LightingMode::PHONG);
+                mesh.set_shading_mode(polyhydra::ShadingMode::FLAT);
                 mesh.set_ambient(0.7f);
                 mesh.set_diffuse(0.3f);
                 mesh.set_specular(0.1f);
@@ -449,12 +449,12 @@ MCCollapser::RetCode MCCollapser::interactiveViewCollapse(bool optimize, bool ra
             }
             else
             {
-                volumeshOS::update(mesh, &tetMesh);
+                polyhydra::update(mesh, &tetMesh);
                 // mesh.set_cell_rounding(0.0);
                 // mesh.set_scale(1.00);
                 // mesh.use_base_color(false);
-                // mesh.set_lighting_mode(volumeshOS::LightingMode::PHONG);
-                // mesh.set_shading_mode(volumeshOS::ShadingMode::FLAT);
+                // mesh.set_lighting_mode(polyhydra::LightingMode::PHONG);
+                // mesh.set_shading_mode(polyhydra::ShadingMode::FLAT);
                 // mesh.set_ambient(0.7f);
                 // mesh.set_diffuse(0.3f);
                 // mesh.set_specular(0.1f);
@@ -462,7 +462,7 @@ MCCollapser::RetCode MCCollapser::interactiveViewCollapse(bool optimize, bool ra
                 // mesh.use_two_sided_lighting(true);
             }
         }
-        volumeshOS::remove_shapes();
+        polyhydra::remove_shapes();
         // Actual mesh: ignore block 3
         for (HFH hf : tetMesh.halffaces())
         {
@@ -473,7 +473,7 @@ MCCollapser::RetCode MCCollapser::interactiveViewCollapse(bool optimize, bool ra
         {
             if (meshProps().get<COLOR_E>(e)[3] > 0.0)
             {
-                auto highlight = mesh.add_shape<volumeshOS::VCylinder>();
+                auto highlight = mesh.add_shape<polyhydra::VCylinder>();
                 assert(!tetMesh.is_deleted(e));
                 auto vs = tetMesh.edge_vertices(e);
                 Vec3d dir = tetMesh.vertex(vs[1]) - tetMesh.vertex(vs[0]);
@@ -488,7 +488,7 @@ MCCollapser::RetCode MCCollapser::interactiveViewCollapse(bool optimize, bool ra
             if (meshProps().get<COLOR_V>(v)[3] > 0.0)
             {
                 Vec3d pos = tetMesh.vertex(v);
-                auto highlight = mesh.add_shape<volumeshOS::VSphere>();
+                auto highlight = mesh.add_shape<polyhydra::VSphere>();
                 highlight.set_position(pos);
                 highlight.set_color(meshProps().get<COLOR_V>(v));
                 highlight.set_scale((float)sphereRadius);
@@ -509,9 +509,9 @@ MCCollapser::RetCode MCCollapser::interactiveViewCollapse(bool optimize, bool ra
     static int scrnum = 0;
     auto makeScreenShot = [&]()
     {
-        volumeshOS::ExportOptions exopt;
-        exopt.width = volumeshOS::get_viewport_width();   // viewport width by default
-        exopt.height = volumeshOS::get_viewport_height(); // viewport height by default
+        polyhydra::ExportOptions exopt;
+        exopt.width = polyhydra::get_viewport_width();   // viewport width by default
+        exopt.height = polyhydra::get_viewport_height(); // viewport height by default
         exopt.include_background = true;                  // include background in image
         exopt.include_shapes = true;                      // include shapes in image
         exopt.include_ground = true;                      // include ground in image
@@ -519,25 +519,25 @@ MCCollapser::RetCode MCCollapser::interactiveViewCollapse(bool optimize, bool ra
 
         auto str = std::to_string(scrnum++);
         auto num = std::string(5 - std::min(5ul, str.length()), '0') + str;
-        volumeshOS::export_image("./" + screenshotFilename + num + ".png", exopt);
+        polyhydra::export_image("./" + screenshotFilename + num + ".png", exopt);
     };
 
-    volumeshOS::use_transparency(true);
-    volumeshOS::use_shadows(true);
-    volumeshOS::set_shape_lighting_mode(volumeshOS::LightingMode::PHONG);
-    volumeshOS::set_shape_ambient(0.75f);
-    volumeshOS::set_shape_diffuse(0.25f);
-    volumeshOS::set_shape_specular(0.3f);
-    volumeshOS::set_shape_specular_coefficient(8.0f);
-    volumeshOS::set_sky_color(OVM::Vec3f{1.0f, 1.0f, 1.0f});
-    volumeshOS::set_ground_color(OVM::Vec3f{1.0f, 1.0f, 1.0f});
-    volumeshOS::Internal::AppState::settings.light.color = {1.0f, 1.0f, 1.0f};
-    volumeshOS::Internal::AppState::settings.sky.sky_color = {1.0f, 1.0f, 1.0f};
-    volumeshOS::Internal::AppState::settings.sky.fog_density = 0.0f;
-    volumeshOS::Internal::AppState::settings.post_processing.active = false;
-    volumeshOS::Internal::AppState::settings.ground.use_pbr = false;
-    volumeshOS::Internal::AppState::settings.shadow.shadow_strength = 0.24f;
-    volumeshOS::Internal::AppState::settings.shadow.penumbra_scale = 22.0f;
+    polyhydra::use_transparency(true);
+    polyhydra::use_shadows(true);
+    polyhydra::set_shape_lighting_mode(polyhydra::LightingMode::PHONG);
+    polyhydra::set_shape_ambient(0.75f);
+    polyhydra::set_shape_diffuse(0.25f);
+    polyhydra::set_shape_specular(0.3f);
+    polyhydra::set_shape_specular_coefficient(8.0f);
+    polyhydra::set_sky_color(OVM::Vec3f{1.0f, 1.0f, 1.0f});
+    polyhydra::set_ground_color(OVM::Vec3f{1.0f, 1.0f, 1.0f});
+    polyhydra::Internal::AppState::settings.light.color = {1.0f, 1.0f, 1.0f};
+    polyhydra::Internal::AppState::settings.sky.sky_color = {1.0f, 1.0f, 1.0f};
+    polyhydra::Internal::AppState::settings.sky.fog_density = 0.0f;
+    polyhydra::Internal::AppState::settings.post_processing.active = false;
+    polyhydra::Internal::AppState::settings.ground.use_pbr = false;
+    polyhydra::Internal::AppState::settings.shadow.shadow_strength = 0.24f;
+    polyhydra::Internal::AppState::settings.shadow.penumbra_scale = 22.0f;
     updateVMesh();
 
     bool animating = false;
@@ -638,7 +638,7 @@ MCCollapser::RetCode MCCollapser::interactiveViewCollapse(bool optimize, bool ra
     int focusMode = 0;
     int selectionID = -1;
     bool init = false;
-    volumeshOS::on_gui_render(
+    polyhydra::on_gui_render(
         [&, this]()
         {
             if (!init)
@@ -821,39 +821,39 @@ MCCollapser::RetCode MCCollapser::interactiveViewCollapse(bool optimize, bool ra
                 animating = true;
                 quantEnabled = 0;
             }
-            if (volumeshOS::Internal::ImGuiUtil::begin_menu_with_background("Visualization", 12))
+            if (polyhydra::Internal::ImGuiUtil::begin_menu_with_background("Visualization", 12))
             {
-                volumeshOS::Internal::ImGuiUtil::menu_item_filled(
+                polyhydra::Internal::ImGuiUtil::menu_item_filled(
                     "Target hexes for quantization",
                     [&] { ImGui::InputInt("##Target hexes for quantization", &nHexes); });
 
-                volumeshOS::Internal::ImGuiUtil::menu_item_filled(
+                polyhydra::Internal::ImGuiUtil::menu_item_filled(
                     "ScreenshotFilename", [&] { ImGui::InputText("##ScreenshotFilename", &screenshotFilename); });
-                volumeshOS::Internal::ImGuiUtil::menu_item_filled(
+                polyhydra::Internal::ImGuiUtil::menu_item_filled(
                     "CylinderRadius", [&] { ImGui::InputDouble("##CylinderRadius", &cylinderRadius); });
-                volumeshOS::Internal::ImGuiUtil::menu_item_filled(
+                polyhydra::Internal::ImGuiUtil::menu_item_filled(
                     "SphereRadius", [&] { ImGui::InputDouble("##SphereRadius", &sphereRadius); });
-                volumeshOS::Internal::ImGuiUtil::menu_item_filled(
+                polyhydra::Internal::ImGuiUtil::menu_item_filled(
                     "", [&] { ImGui::ColorEdit4("Color0A", color0A.data(), ImGuiColorEditFlags_NoInputs); });
-                volumeshOS::Internal::ImGuiUtil::menu_item_filled(
+                polyhydra::Internal::ImGuiUtil::menu_item_filled(
                     "", [&] { ImGui::ColorEdit4("Color1A", color1A.data(), ImGuiColorEditFlags_NoInputs); });
-                volumeshOS::Internal::ImGuiUtil::menu_item_filled(
+                polyhydra::Internal::ImGuiUtil::menu_item_filled(
                     "", [&] { ImGui::ColorEdit4("Color2A", color2A.data(), ImGuiColorEditFlags_NoInputs); });
-                volumeshOS::Internal::ImGuiUtil::menu_item_filled(
+                polyhydra::Internal::ImGuiUtil::menu_item_filled(
                     "", [&] { ImGui::ColorEdit4("Color3A", color3A.data(), ImGuiColorEditFlags_NoInputs); });
-                volumeshOS::Internal::ImGuiUtil::menu_item_filled(
+                polyhydra::Internal::ImGuiUtil::menu_item_filled(
                     "", [&] { ImGui::ColorEdit4("Color0P", color0P.data(), ImGuiColorEditFlags_NoInputs); });
-                volumeshOS::Internal::ImGuiUtil::menu_item_filled(
+                polyhydra::Internal::ImGuiUtil::menu_item_filled(
                     "", [&] { ImGui::ColorEdit4("Color4P", color4P.data(), ImGuiColorEditFlags_NoInputs); });
-                volumeshOS::Internal::ImGuiUtil::menu_item_filled(
+                polyhydra::Internal::ImGuiUtil::menu_item_filled(
                     "", [&] { ImGui::ColorEdit4("Color5P", color5P.data(), ImGuiColorEditFlags_NoInputs); });
-                volumeshOS::Internal::ImGuiUtil::menu_item_filled(
+                polyhydra::Internal::ImGuiUtil::menu_item_filled(
                     "", [&] { ImGui::ColorEdit4("Color6P", color6P.data(), ImGuiColorEditFlags_NoInputs); });
-                volumeshOS::Internal::ImGuiUtil::end_menu();
+                polyhydra::Internal::ImGuiUtil::end_menu();
             }
-            if (volumeshOS::Internal::ImGuiUtil::begin_menu_with_background("Focus", 3))
+            if (polyhydra::Internal::ImGuiUtil::begin_menu_with_background("Focus", 3))
             {
-                volumeshOS::Internal::ImGuiUtil::menu_item_filled("Select by ID",
+                polyhydra::Internal::ImGuiUtil::menu_item_filled("Select by ID",
                                                                   [&]
                                                                   {
                                                                       constexpr const char* selection_modes[] = {
@@ -864,26 +864,26 @@ MCCollapser::RetCode MCCollapser::interactiveViewCollapse(bool optimize, bool ra
                                                                                    IM_ARRAYSIZE(selection_modes),
                                                                                    IM_ARRAYSIZE(selection_modes));
                                                                   });
-                volumeshOS::Internal::ImGuiUtil::menu_item_filled(
+                polyhydra::Internal::ImGuiUtil::menu_item_filled(
                     "ID", [&] { ImGui::InputInt("##ManualSelectionID", &selectionID); });
-                volumeshOS::Internal::ImGuiUtil::menu_item_filled(
+                polyhydra::Internal::ImGuiUtil::menu_item_filled(
                     "",
                     [&]
                     {
                         if (ImGui::Button("Focus"))
                         {
-                            volumeshOS::set_camera_mode(volumeshOS::CameraMode::ORBIT);
+                            polyhydra::set_camera_mode(polyhydra::CameraMode::ORBIT);
                             Vec3d target;
                             switch (focusMode)
                             {
                             case 0:
-                                volumeshOS::set_camera_mode(volumeshOS::CameraMode::FLY);
+                                polyhydra::set_camera_mode(polyhydra::CameraMode::FLY);
                                 break;
                             case 1:
                                 if (selectionID >= 0 && selectionID <= (int)tetMesh.n_vertices())
                                     target = tetMesh.vertex(VH(selectionID));
                                 else
-                                    volumeshOS::set_camera_mode(volumeshOS::CameraMode::FLY);
+                                    polyhydra::set_camera_mode(polyhydra::CameraMode::FLY);
                                 break;
                             case 2:
                                 if (selectionID >= 0 && selectionID <= (int)tetMesh.n_edges())
@@ -892,7 +892,7 @@ MCCollapser::RetCode MCCollapser::interactiveViewCollapse(bool optimize, bool ra
                                     target = 0.5 * tetMesh.vertex(vs[0]) + 0.5 * tetMesh.vertex(vs[1]);
                                 }
                                 else
-                                    volumeshOS::set_camera_mode(volumeshOS::CameraMode::FLY);
+                                    polyhydra::set_camera_mode(polyhydra::CameraMode::FLY);
                                 break;
                             case 3:
                                 if (selectionID >= 0 && selectionID <= (int)tetMesh.n_faces())
@@ -905,7 +905,7 @@ MCCollapser::RetCode MCCollapser::interactiveViewCollapse(bool optimize, bool ra
                                     target /= vs.size();
                                 }
                                 else
-                                    volumeshOS::set_camera_mode(volumeshOS::CameraMode::FLY);
+                                    polyhydra::set_camera_mode(polyhydra::CameraMode::FLY);
                                 break;
                             case 4:
                                 if (selectionID >= 0 && selectionID <= (int)tetMesh.n_cells())
@@ -918,21 +918,21 @@ MCCollapser::RetCode MCCollapser::interactiveViewCollapse(bool optimize, bool ra
                                     target /= vs.size();
                                 }
                                 else
-                                    volumeshOS::set_camera_mode(volumeshOS::CameraMode::FLY);
+                                    polyhydra::set_camera_mode(polyhydra::CameraMode::FLY);
                                 break;
                             default:
                                 break;
                             }
-                            volumeshOS::set_camera_target(mesh.get_transformed_point(target));
+                            polyhydra::set_camera_target(mesh.get_transformed_point(target));
                         }
                     });
-                volumeshOS::Internal::ImGuiUtil::end_menu();
+                polyhydra::Internal::ImGuiUtil::end_menu();
             }
 
             ImGui::End();
         });
 
-    volumeshOS::open();
+    polyhydra::open();
 
     if (zeroElementsRemain())
     {

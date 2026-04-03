@@ -9,7 +9,7 @@
 
 #ifdef MC3D_WITH_VIEWER
 #include <settings/AppState.h>
-#include <volumeshOS.h>
+#include <polyhydra/polyhydra.h>
 #endif
 
 namespace c4hex
@@ -470,7 +470,7 @@ void HexRemesher::viewHexMesh(HexMeshProps& hexMeshProps) const
 {
 #ifdef MC3D_WITH_VIEWER
     using namespace mc3d;
-    using namespace volumeshOS;
+    using namespace polyhydra;
 
     set<CH> selected;
     vector<VSphere> vmeshNodes;
