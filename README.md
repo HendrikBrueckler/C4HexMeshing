@@ -61,7 +61,7 @@ In root directory
 An example command-line application is included that reads a tetrahedral mesh including a seamless parametrization from a file in .hexex-format, as used and documented in [libHexEx](https://www.graphics.rwth-aachen.de/software/libHexEx/).
 It can generate the output of several stages of the algorithm, including the original MC, collapsed MC, integer-grid map (unoptimized) and hex mesh (unoptimized).
 
-After building, the CLI app can be found in ```build/Build/bin/cli``` .
+After building, the CLI app can be found in ```build/Build/bin/``` .
 For full information on its usage, execute
 
     c4hex_cli --help
@@ -72,7 +72,7 @@ A dataset of 200 precomputed motorcycle complexes on seamless parametrizations f
 
 ### Viewer Support
 Additionally, the CLI (and library) can be built with support for volume mesh visualization via [polyhydra](https://github.com/CG-UPB/polyhydra), by calling CMake with the additional flag ```-DMC3D_WITH_VIEWER=On```.
-In this case a dedicated viewer app for inspecting the extracted meshes is built in ```build/Build/bin/viewer/c4hex_viewer_demo```.
+In this case a dedicated viewer app for inspecting the extracted meshes is built as ```build/Build/bin/c4hex_viewer_demo```.
 
 ### API
 For details on the API of the library, check the headers in ```include```, they are thoroughly documented. Apart from that, ```cli/main.cpp``` demonstrates usage of the entire pipeline for both simple and advanced usage.
