@@ -66,6 +66,9 @@ add_subdirectory(src)
 ### Add CLI
 if (C4Hex_BUILD_CLI)
     add_subdirectory(cli)
+    if (MC3D_WITH_VIEWER)
+        add_subdirectory(viewer-demo)
+    endif()
 endif()
 
 ### Fake successful finder run if compiling as a dependent project.

@@ -1,12 +1,12 @@
 ![new-new-teaser](https://github.com/user-attachments/assets/110726b8-4d61-4e38-8d63-75f78a90bec7)
-
-# Flexible Singularities coming soon!
-An implementation of our new paper *Volume Quantization with Flexible Singularities for Hexahedral Meshing* (coming to Eurographics 2026) will be integrated into C4HexMeshing within the next weeks.
+# *Flexible Singularities* coming soon!
+An implementation of our new paper [Volume Quantization with Flexible Singularities for Hexahedral Meshing](https://graphics.cs.uni-paderborn.de/papers/FlexibleSingularities_Bruckler_EG2026.pdf) (coming to Eurographics 2026) has been integrated recently.
 It allows adaptive simplification of the initial singularity graph at the quantization level via [QGP3D](https://github.com/HendrikBrueckler/QGP3D) and can extract the simplified structure or a hex mesh.
+
+Additionally we have recently integrated direct volume mesh visualization via [polyhydra](https://github.com/CG-UPB/polyhydra) into the library, enabling fast and interactive visualization of the algorithm's stages and their results.
 ***
 
 ![teaser](https://github.com/HendrikBrueckler/C4HexMeshing/assets/38473042/f70ef0d1-e1f4-4e35-a024-ad9440baf83c)
-
 # Collapsing Cubical Cell Complexes for Hex Meshing
 
 `C4HexMeshing` is an implementation of [Collapsing Embedded Cell Collapses for Safer Hexahedral Meshing \[Brückler et al. 2023\]](http://graphics.cs.uos.de/papers/T-Collapsing_Bru%CC%88ckler_SA2023_Preprint.pdf) (SIGGRAPH Asia 2023) distributed under GPLv3.
@@ -45,8 +45,9 @@ Note, that (currently) no geometric optimization other than tentative untangling
 - GMP (NOT included, must be installed on your system)
 - Clp (NOT included, must be installed on your system)
 - NLOPT (optional, for map optimization, NOT included, must be installed on your system)
-- [MC3D](https://github.com/HendrikBrueckler/MC3D) (Included as submodule, together with all subdependencies)
-- [QGP3D](https://github.com/HendrikBrueckler/QGP3D) (Included as submodule, together with all subdependencies)
+- [MC3D](https://github.com/HendrikBrueckler/MC3D) (included as submodule, together with all subdependencies)
+- [QGP3D](https://github.com/HendrikBrueckler/QGP3D) (icluded as submodule, together with all subdependencies)
+- [polyhydra](https://github.com/CG-UPB/polyhydra) (volume mesh viewer, included as submodule, enabled via CMake flag ```-DMC3D_WITH_VIEWER=On```)
 
 ### Building
 In root directory
@@ -65,7 +66,13 @@ For full information on its usage, execute
 
     c4hex_cli --help
 
-Example input can be found in folder ```extern/QGP3D/extern/MC3D/tests/resources```.
+### Input data
+Example input can be found in folder ```extern/MC3D/tests/resources```.
+A dataset of 200 precomputed motorcycle complexes on seamless parametrizations from various sources is available under [MC3D-samples](https://github.com/HendrikBrueckler/MC3D-samples).
+
+### Viewer Support
+Additionally, the CLI (and library) can be built with support for volume mesh visualization via [polyhydra](https://github.com/CG-UPB/polyhydra), by calling CMake with the additional flag ```-DMC3D_WITH_VIEWER=On```.
+In this case a dedicated viewer app for inspecting the extracted meshes is built in ```build/Build/bin/viewer/c4hex_viewer_demo```.
 
 ### API
 For details on the API of the library, check the headers in ```include```, they are thoroughly documented. Apart from that, ```cli/main.cpp``` demonstrates usage of the entire pipeline for both simple and advanced usage.
