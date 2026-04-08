@@ -138,7 +138,7 @@ int main(int argc, char** argv)
     app.add_option("--num-hexes", nTargetHexes, "Target number of hexes");
 #ifdef MC3D_WITH_VIEWER
     bool useViewer = true;
-    app.add_flag("--use-viewer", useViewer, "Use viewer to visualize some steps of the pipeline. \n Close the viewer to let algorithm continue.");
+    app.add_flag("--use-viewer, !--no-viewer", useViewer, "Use viewer to visualize some steps of the pipeline. \n Close the viewer to let algorithm continue.");
 #endif
 #ifndef QGP3D_WITHOUT_IQP
     int iqpTimeLimit = 180;
@@ -371,7 +371,7 @@ int main(int argc, char** argv)
     else if (!constraintFile.empty())
         ASSERT_SUCCESS("Writing constraints", ConstraintWriter(meshProps, constraintFile).writeTetPathConstraints());
 
-    // if (!outputIGMFile.empty() || !outputHexFile.empty())
+    if (meshProps.get<MC_MESH_PROPS>()->isAllocated<ARC_INT_LENGTH>())
     {
         IGMGenerator igmgen(meshProps);
         LOG(INFO) << "Generating IGM...";
