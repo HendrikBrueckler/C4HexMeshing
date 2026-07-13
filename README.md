@@ -1,5 +1,5 @@
 ![new-new-teaser](https://github.com/user-attachments/assets/110726b8-4d61-4e38-8d63-75f78a90bec7)
-# *Flexible Singularities* coming soon!
+# *Flexible Singularities* now integrated into C4HexMeshing!
 An implementation of our new paper [Volume Quantization with Flexible Singularities for Hexahedral Meshing](https://graphics.cs.uni-paderborn.de/papers/FlexibleSingularities_Bruckler_EG2026.pdf) (coming to Eurographics 2026) has been integrated recently.
 It allows adaptive simplification of the initial singularity graph at the quantization level via [QGP3D](https://github.com/HendrikBrueckler/QGP3D) and can extract the simplified structure or a hex mesh.
 
