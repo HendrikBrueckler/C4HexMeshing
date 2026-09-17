@@ -11,6 +11,7 @@
 
 #include <chrono>
 #include <iostream>
+#include <random>
 
 #ifdef MC3D_WITH_VIEWER
 #include <QGP3D/IQP/IQPQuantizer.hpp>
@@ -1508,7 +1509,11 @@ bool MCCollapser::collapseNextZeroArc()
         if (isZeroArc(a))
             asZero.push_back(a);
     if (_randomOrder)
-        std::random_shuffle(asZero.begin(), asZero.end());
+    {
+        std::random_device rd;
+        std::mt19937 g(rd());
+        std::shuffle(asZero.begin(), asZero.end(), g);
+    }
     else
         std::sort(asZero.begin(),
                   asZero.end(),

@@ -11,7 +11,11 @@ list(APPEND C4Hex_LIB_LIST QGP3D::QGP3D)
 
 # Clp
 find_package(CLP REQUIRED)
-list(APPEND C4Hex_LIB_LIST_PRV ${CLP_LIBRARIES})
+if (TARGET Coin::CLP)
+  list(APPEND C4Hex_LIB_LIST_PRV Coin::CLP)
+else()
+  list(APPEND C4Hex_LIB_LIST_PRV ${CLP_LIBRARIES})
+endif()
 
 # nlopt
 find_package(NLOPT)
@@ -19,10 +23,6 @@ if (NLOPT_FOUND)
     list(APPEND C4Hex_COMPILE_DEFINITIONS_PRV "C4HEX_WITH_TLC")
     list(APPEND C4Hex_LIB_LIST_PRV "${NLOPT_LIBRARIES}")
 endif()
-
-#eigen
-find_package(Eigen3 3.3 REQUIRED NO_MODULE)
-list(APPEND C4Hex_LIB_LIST Eigen3::Eigen)
 
 #lbfgspp
 if (NOT TARGET lbfgspp)

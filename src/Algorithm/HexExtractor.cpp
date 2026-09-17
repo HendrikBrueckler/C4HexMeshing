@@ -48,12 +48,12 @@ map<VH, VH> HexExtractor<MESHPROPS>::createNodeHexV()
 
     for (VH n : mcMeshProps().mesh().vertices())
     {
-        VH v = _hexMeshProps.mesh().add_vertex(meshProps().mesh().vertex(mcMeshProps().get<NODE_MESH_VERTEX>(n)));
+        VH v = _hexMeshProps.mesh().add_vertex(meshProps().mesh().vertex(mcMeshProps().template get<NODE_MESH_VERTEX>(n)));
         n2hexV[n] = v;
-        if (mcMeshProps().isAllocated<IS_FEATURE_V>())
-            _hexMeshProps.template set<IS_FEATURE_V>(v, mcMeshProps().get<IS_FEATURE_V>(n));
-        if (mcMeshProps().isAllocated<MARK_N>())
-            _hexMeshProps.template set<MARK_N>(v, mcMeshProps().get<MARK_N>(n));
+        if (mcMeshProps().template isAllocated<IS_FEATURE_V>())
+            _hexMeshProps.template set<IS_FEATURE_V>(v, mcMeshProps().template get<IS_FEATURE_V>(n));
+        if (mcMeshProps().template isAllocated<MARK_N>())
+            _hexMeshProps.template set<MARK_N>(v, mcMeshProps().template get<MARK_N>(n));
         _hexMeshProps.template set<MC_NODE_ID>(v, n.idx());
     }
 
@@ -79,17 +79,17 @@ map<EH, vector<VH>> HexExtractor<MESHPROPS>::createArcHexVE(const map<VH, VH>& n
         VH nFrom = mc.from_vertex_handle(ha);
         VH nTo = mc.to_vertex_handle(ha);
 
-        auto& hes = mcMeshProps().ref<ARC_MESH_HALFEDGES>(a);
+        auto& hes = mcMeshProps().template ref<ARC_MESH_HALFEDGES>(a);
         auto itHeCurrent = hes.begin();
-        CH b = meshProps().get<MC_BLOCK>(*tetMesh.hec_iter(*itHeCurrent));
+        CH b = meshProps().template get<MC_BLOCK>(*tetMesh.hec_iter(*itHeCurrent));
         UVWDir dir = halfarcDirInBlock(ha, b);
         bool negDir = isNeg(dir);
         int deltaCoord = toCoord(dir);
         VH vStart = tetMesh.from_vertex_handle(*itHeCurrent);
         CH tetStart = anyIncidentTetOfBlock(vStart, b);
-        Vec3Q igmStart = meshProps().ref<CHART_IGM>(tetStart).at(vStart);
+        Vec3Q igmStart = meshProps().template ref<CHART_IGM>(tetStart).at(vStart);
 
-        int arcLen = mcMeshProps().get<ARC_INT_LENGTH>(a);
+        int arcLen = mcMeshProps().template get<ARC_INT_LENGTH>(a);
         auto& delta2hexV = a2delta2hexV[a];
         delta2hexV = vector<VH>(stepsPerInt * arcLen + 1);
         delta2hexV[0] = n2hexV.at(nFrom);
@@ -116,8 +116,8 @@ map<EH, vector<VH>> HexExtractor<MESHPROPS>::createArcHexVE(const map<VH, VH>& n
                     vTo = tetMesh.to_vertex_handle(heCurrent);
                     CH tetFrom = anyIncidentTetOfBlock(vFrom, b);
                     CH tetTo = anyIncidentTetOfBlock(vTo, b);
-                    Q igmFrom = meshProps().ref<CHART_IGM>(tetFrom).at(vFrom)[deltaCoord];
-                    Q igmTo = meshProps().ref<CHART_IGM>(tetTo).at(vTo)[deltaCoord];
+                    Q igmFrom = meshProps().template ref<CHART_IGM>(tetFrom).at(vFrom)[deltaCoord];
+                    Q igmTo = meshProps().template ref<CHART_IGM>(tetTo).at(vTo)[deltaCoord];
                     t = (Q(igmCurrent[deltaCoord]) - igmFrom) / (igmTo - igmFrom);
                     if (t > 1)
                         itHeCurrent++;
@@ -144,12 +144,12 @@ map<EH, vector<VH>> HexExtractor<MESHPROPS>::createArcHexVE(const map<VH, VH>& n
         for (int i = 0; i < (int)delta2v.size() - 1; i++)
         {
             EH e = _hexMeshProps.mesh().add_edge(delta2v[i], delta2v[i + 1]);
-            if (mcMeshProps().isAllocated<IS_FEATURE_E>())
-                _hexMeshProps.template set<IS_FEATURE_E>(e, mcMeshProps().get<IS_FEATURE_E>(a));
-            if (mcMeshProps().isAllocated<IS_SINGULAR>() && mcMeshProps().get<IS_SINGULAR>(a))
-                _hexMeshProps.template set<IS_SINGULAR>(e, mcMeshProps().get<IS_SINGULAR>(a));
-            if (mcMeshProps().isAllocated<MARK_A>())
-                _hexMeshProps.template set<MARK_A>(e, mcMeshProps().get<MARK_A>(a));
+            if (mcMeshProps().template isAllocated<IS_FEATURE_E>())
+                _hexMeshProps.template set<IS_FEATURE_E>(e, mcMeshProps().template get<IS_FEATURE_E>(a));
+            if (mcMeshProps().template isAllocated<IS_SINGULAR>() && mcMeshProps().template get<IS_SINGULAR>(a))
+                _hexMeshProps.template set<IS_SINGULAR>(e, mcMeshProps().template get<IS_SINGULAR>(a));
+            if (mcMeshProps().template isAllocated<MARK_A>())
+                _hexMeshProps.template set<MARK_A>(e, mcMeshProps().template get<MARK_A>(a));
             _hexMeshProps.template set<MC_ARC_ID>(e, a.idx());
         }
     }
@@ -194,17 +194,17 @@ map<FH, map<Vec3Q, VH>> HexExtractor<MESHPROPS>::createPatchHexVEF(const map<EH,
                 if (ha.idx() % 2 != 0)
                     ha = mc.opposite_halfedge_handle(ha);
                 EH a = mc.edge_handle(ha);
-                auto arcLen = mcMeshProps().get<ARC_INT_LENGTH>(a);
+                auto arcLen = mcMeshProps().template get<ARC_INT_LENGTH>(a);
 
                 VH nFrom = mc.from_vertex_handle(ha);
-                VH vFrom = mcMeshProps().get<NODE_MESH_VERTEX>(nFrom);
+                VH vFrom = mcMeshProps().template get<NODE_MESH_VERTEX>(nFrom);
                 CH tetFrom = anyIncidentTetOfBlock(vFrom, b);
-                Vec3Q igmFrom = (meshProps().ref<CHART_IGM>(tetFrom).at(vFrom));
+                Vec3Q igmFrom = (meshProps().template ref<CHART_IGM>(tetFrom).at(vFrom));
 
                 VH nTo = mc.to_vertex_handle(ha);
-                VH vTo = mcMeshProps().get<NODE_MESH_VERTEX>(nTo);
+                VH vTo = mcMeshProps().template get<NODE_MESH_VERTEX>(nTo);
                 CH tetTo = anyIncidentTetOfBlock(vTo, b);
-                Vec3Q igmTo = (meshProps().ref<CHART_IGM>(tetTo).at(vTo));
+                Vec3Q igmTo = (meshProps().template ref<CHART_IGM>(tetTo).at(vTo));
 
                 const auto& delta2hexv = a2delta2hexV.at(a);
                 Vec3Q igmBetween = igmFrom;
@@ -225,15 +225,15 @@ map<FH, map<Vec3Q, VH>> HexExtractor<MESHPROPS>::createPatchHexVEF(const map<EH,
         {
             pairTT<int> sideLengths;
 
-            VH vCorner0 = mcMeshProps().get<NODE_MESH_VERTEX>(cornersHp[0]);
+            VH vCorner0 = mcMeshProps().template get<NODE_MESH_VERTEX>(cornersHp[0]);
             CH tetCorner0 = anyIncidentTetOfBlock(vCorner0, b);
-            Vec3i igmCorner0 = Vec3Q2i(meshProps().ref<CHART_IGM>(tetCorner0).at(vCorner0));
-            VH vCorner1 = mcMeshProps().get<NODE_MESH_VERTEX>(cornersHp[1]);
+            Vec3i igmCorner0 = Vec3Q2i(meshProps().template ref<CHART_IGM>(tetCorner0).at(vCorner0));
+            VH vCorner1 = mcMeshProps().template get<NODE_MESH_VERTEX>(cornersHp[1]);
             CH tetCorner1 = anyIncidentTetOfBlock(vCorner1, b);
-            Vec3i igmCorner1 = Vec3Q2i(meshProps().ref<CHART_IGM>(tetCorner1).at(vCorner1));
-            VH vCorner3 = mcMeshProps().get<NODE_MESH_VERTEX>(cornersHp[3]);
+            Vec3i igmCorner1 = Vec3Q2i(meshProps().template ref<CHART_IGM>(tetCorner1).at(vCorner1));
+            VH vCorner3 = mcMeshProps().template get<NODE_MESH_VERTEX>(cornersHp[3]);
             CH tetCorner3 = anyIncidentTetOfBlock(vCorner3, b);
-            Vec3i igmCorner3 = Vec3Q2i(meshProps().ref<CHART_IGM>(tetCorner3).at(vCorner3));
+            Vec3i igmCorner3 = Vec3Q2i(meshProps().template ref<CHART_IGM>(tetCorner3).at(vCorner3));
 
             int deltaCoord1 = -1;
             int deltaCoord3 = -1;
@@ -279,7 +279,7 @@ map<FH, map<Vec3Q, VH>> HexExtractor<MESHPROPS>::createPatchHexVEF(const map<EH,
                    == (sideLengths.first * stepsPerInt + 1) * (sideLengths.second * stepsPerInt + 1));
 
             {
-                for (HFH hf : mcMeshProps().ref<PATCH_MESH_HALFFACES>(p))
+                for (HFH hf : mcMeshProps().template ref<PATCH_MESH_HALFFACES>(p))
                 {
                     if (flipped)
                         hf = tetMesh.opposite_halfface_handle(hf);
@@ -289,7 +289,7 @@ map<FH, map<Vec3Q, VH>> HexExtractor<MESHPROPS>::createPatchHexVEF(const map<EH,
                     Vec3d bboxMax(-DBL_MAX, -DBL_MAX, -DBL_MAX);
                     for (VH v : meshProps().get_halfface_vertices(hf))
                     {
-                        Vec3d igm = Vec3Q2d(meshProps().ref<CHART_IGM>(tet).at(v));
+                        Vec3d igm = Vec3Q2d(meshProps().template ref<CHART_IGM>(tet).at(v));
                         for (int coord = 0; coord < 3; coord++)
                         {
                             bboxMin[coord] = std::min(igm[coord], bboxMin[coord]);
@@ -322,7 +322,7 @@ map<FH, map<Vec3Q, VH>> HexExtractor<MESHPROPS>::createPatchHexVEF(const map<EH,
                                 Vec3Q xyz(0, 0, 0);
                                 for (int i = 0; i < 3; i++)
                                     xyz += barCoords[i] * Vec3Q(tetMesh.vertex(vs[i]));
-                                _hexMeshProps.mesh().template set_vertex(igm2hexV.at(igm), Vec3Q2d(xyz));
+                                _hexMeshProps.mesh().set_vertex(igm2hexV.at(igm), Vec3Q2d(xyz));
                             }
                         }
                     }
@@ -364,10 +364,10 @@ map<FH, map<Vec3Q, VH>> HexExtractor<MESHPROPS>::createPatchHexVEF(const map<EH,
                 for (Vec3Q uvw : uvws)
                     vs.emplace_back(igm2v.at(uvw));
                 FH f = _hexMeshProps.mesh().add_face(vs);
-                if (mcMeshProps().isAllocated<IS_FEATURE_F>())
-                    _hexMeshProps.template set<IS_FEATURE_F>(f, mcMeshProps().get<IS_FEATURE_F>(p));
-                if (mcMeshProps().isAllocated<MARK_P>())
-                    _hexMeshProps.template set<MARK_P>(f, mcMeshProps().get<MARK_P>(p));
+                if (mcMeshProps().template isAllocated<IS_FEATURE_F>())
+                    _hexMeshProps.template set<IS_FEATURE_F>(f, mcMeshProps().template get<IS_FEATURE_F>(p));
+                if (mcMeshProps().template isAllocated<MARK_P>())
+                    _hexMeshProps.template set<MARK_P>(f, mcMeshProps().template get<MARK_P>(p));
                 _hexMeshProps.template set<MC_PATCH_ID>(f, p.idx());
             }
     }
@@ -391,9 +391,9 @@ map<CH, map<Vec3Q, VH>> HexExtractor<MESHPROPS>::createBlockHexVEFC(const map<FH
         auto& igm2hexV = b2igm2hexV[b];
 
         Vec3i minIGM
-            = Vec3Q2i(nodeIGMinBlock(mcMeshProps().ref<BLOCK_CORNER_NODES>(b).at(UVWDir::NEG_U_NEG_V_NEG_W), b));
+            = Vec3Q2i(nodeIGMinBlock(mcMeshProps().template ref<BLOCK_CORNER_NODES>(b).at(UVWDir::NEG_U_NEG_V_NEG_W), b));
         Vec3i maxIGM
-            = Vec3Q2i(nodeIGMinBlock(mcMeshProps().ref<BLOCK_CORNER_NODES>(b).at(UVWDir::POS_U_POS_V_POS_W), b));
+            = Vec3Q2i(nodeIGMinBlock(mcMeshProps().template ref<BLOCK_CORNER_NODES>(b).at(UVWDir::POS_U_POS_V_POS_W), b));
 
         for (int U = minIGM[0]; U <= maxIGM[0]; U++)
             for (int stepU = 0; stepU < (U == maxIGM[0] ? 1 : stepsPerInt); stepU++)
@@ -426,7 +426,7 @@ map<CH, map<Vec3Q, VH>> HexExtractor<MESHPROPS>::createBlockHexVEFC(const map<FH
                                     igm2hexV[igm] = _hexMeshProps.mesh().add_vertex(Vec3d(DBL_MAX, DBL_MAX, DBL_MAX));
                                 else
                                 {
-                                    const auto& patches = mcMeshProps().ref<BLOCK_FACE_PATCHES>(b).at(lookupDir);
+                                    const auto& patches = mcMeshProps().template ref<BLOCK_FACE_PATCHES>(b).at(lookupDir);
 #ifndef NDEBUG
                                     bool found = false;
 #endif
@@ -438,7 +438,7 @@ map<CH, map<Vec3Q, VH>> HexExtractor<MESHPROPS>::createBlockHexVEFC(const map<FH
                                         Vec3Q transformedIGM = igm;
                                         if (!mainHP)
                                         {
-                                            Transition trans = mcMeshProps().get<PATCH_IGM_TRANSITION>(p);
+                                            Transition trans = mcMeshProps().template get<PATCH_IGM_TRANSITION>(p);
                                             transformedIGM = trans.invert().apply(Vec3Q(igm));
                                         }
                                         auto it = patchigm2hexV.find(transformedIGM);
@@ -454,7 +454,7 @@ map<CH, map<Vec3Q, VH>> HexExtractor<MESHPROPS>::createBlockHexVEFC(const map<FH
                                 }
                             }
 
-        for (CH tet : mcMeshProps().ref<BLOCK_MESH_TETS>(b))
+        for (CH tet : mcMeshProps().template ref<BLOCK_MESH_TETS>(b))
         {
             if (doubleVolumeIGM(tet) < 1e-6 && rationalVolumeIGM(tet) <= 0)
                 continue;
@@ -463,7 +463,7 @@ map<CH, map<Vec3Q, VH>> HexExtractor<MESHPROPS>::createBlockHexVEFC(const map<FH
             Vec3Q bboxMax(-DBL_MAX, -DBL_MAX, -DBL_MAX);
             for (VH v : tetMesh.tet_vertices(tet))
             {
-                Vec3Q igm = meshProps().ref<CHART_IGM>(tet).at(v);
+                Vec3Q igm = meshProps().template ref<CHART_IGM>(tet).at(v);
                 for (int coord = 0; coord < 3; coord++)
                 {
                     bboxMin[coord] = std::min(igm[coord], bboxMin[coord]);
@@ -507,7 +507,7 @@ map<CH, map<Vec3Q, VH>> HexExtractor<MESHPROPS>::createBlockHexVEFC(const map<FH
                             Vec3Q xyz(0, 0, 0);
                             for (int i = 0; i < 4; i++)
                                 xyz += barCoords[i] * Vec3Q(tetMesh.vertex(vs[i]));
-                            _hexMeshProps.mesh().template set_vertex(igm2hexV.at(igm), Vec3Q2d(xyz));
+                            _hexMeshProps.mesh().set_vertex(igm2hexV.at(igm), Vec3Q2d(xyz));
                         }
                     }
                 }
@@ -526,9 +526,9 @@ map<CH, map<Vec3Q, VH>> HexExtractor<MESHPROPS>::createBlockHexVEFC(const map<FH
         auto& igm2hexV = kv.second;
 
         Vec3i minIGM
-            = Vec3Q2i(nodeIGMinBlock(mcMeshProps().ref<BLOCK_CORNER_NODES>(b).at(UVWDir::NEG_U_NEG_V_NEG_W), b));
+            = Vec3Q2i(nodeIGMinBlock(mcMeshProps().template ref<BLOCK_CORNER_NODES>(b).at(UVWDir::NEG_U_NEG_V_NEG_W), b));
         Vec3i maxIGM
-            = Vec3Q2i(nodeIGMinBlock(mcMeshProps().ref<BLOCK_CORNER_NODES>(b).at(UVWDir::POS_U_POS_V_POS_W), b));
+            = Vec3Q2i(nodeIGMinBlock(mcMeshProps().template ref<BLOCK_CORNER_NODES>(b).at(UVWDir::POS_U_POS_V_POS_W), b));
 
         for (int U = minIGM[0]; U < maxIGM[0]; U++)
             for (int V = minIGM[1]; V < maxIGM[1]; V++)
@@ -578,8 +578,8 @@ map<CH, map<Vec3Q, VH>> HexExtractor<MESHPROPS>::createBlockHexVEFC(const map<FH
                     CH c = _hexMeshProps.mesh().add_cell(hfs);
                     assert(c.is_valid());
                     _hexMeshProps.template set<MC_BLOCK_ID>(c, b.idx());
-                    if (mcMeshProps().isAllocated<MARK_B>())
-                        _hexMeshProps.template set<MARK_B>(c, mcMeshProps().get<MARK_B>(b));
+                    if (mcMeshProps().template isAllocated<MARK_B>())
+                        _hexMeshProps.template set<MARK_B>(c, mcMeshProps().template get<MARK_B>(b));
                 }
     }
 
@@ -599,8 +599,8 @@ bool HexExtractor<MESHPROPS>::barycentricCoordsIGM(
     vector<Vec3Q> edgeVecs;
     for (int corner = 0; corner < 3; corner++)
     {
-        const auto& igmUVWfrom = meshProps().ref<CHART_IGM>(tet).at(vs[corner]);
-        const auto& igmUVWto = meshProps().ref<CHART_IGM>(tet).at(vs[(corner + 1) % 3]);
+        const auto& igmUVWfrom = meshProps().template ref<CHART_IGM>(tet).at(vs[corner]);
+        const auto& igmUVWto = meshProps().template ref<CHART_IGM>(tet).at(vs[(corner + 1) % 3]);
         cornerIGM.emplace_back(igmUVWfrom);
         edgeVecs.emplace_back(igmUVWto - igmUVWfrom);
     }
@@ -640,7 +640,7 @@ bool HexExtractor<MESHPROPS>::barycentricCoordsIGM(const CH& tet, const Vec3Q& i
     vector<Vec3Q> cornerIGMs;
     vector<Vec3Q> oppHfNormals;
     for (VH v : tetMesh.tet_vertices(tet))
-        cornerIGMs.emplace_back(meshProps().ref<CHART_IGM>(tet).at(v));
+        cornerIGMs.emplace_back(meshProps().template ref<CHART_IGM>(tet).at(v));
 
     for (int corner = 0; corner < 3; corner++)
     {

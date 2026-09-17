@@ -122,8 +122,9 @@ int main(int argc, char** argv)
     app.add_flag("--block-structured",
                  blockStructured,
                  "Whether to collapse first and then requantize to an estimated reasonable amount of hexes");
-    app.add_option(
-        "--times-minimal", timesMinimalHexes, "By which factor to scale the minimum number of hexes for block structured output");
+    app.add_option("--times-minimal",
+                   timesMinimalHexes,
+                   "By which factor to scale the minimum number of hexes for block structured output");
     app.add_flag("--random-order", randomOrder, "Ordering of collapses");
     app.add_option("--collapse-direction", direction, "Direction of collapses");
     app.add_flag(
@@ -138,7 +139,9 @@ int main(int argc, char** argv)
     app.add_option("--num-hexes", nTargetHexes, "Target number of hexes");
 #ifdef MC3D_WITH_VIEWER
     bool useViewer = true;
-    app.add_flag("--use-viewer, !--no-viewer", useViewer, "Use viewer to visualize some steps of the pipeline. \n Close the viewer to let algorithm continue.");
+    app.add_flag("--use-viewer, !--no-viewer",
+                 useViewer,
+                 "Use viewer to visualize some steps of the pipeline. \n Close the viewer to let algorithm continue.");
 #endif
 #ifndef QGP3D_WITHOUT_IQP
     int iqpTimeLimit = 180;
@@ -164,7 +167,9 @@ int main(int argc, char** argv)
 
     meshProps.allocate<ALGO_VARIANT>(variant);
     LOG(INFO) << "Running algorithm variant " << meshProps.get<ALGO_VARIANT>() << " with "
-              << (variant % 2 ? "fixed " : ("flexible " + variant / 4 % 2 ? "but padded " : "")) << "singularities"
+              << (variant % 2 ? "fixed "
+                              : (std::string("flexible ") + std::string((variant / 4 % 2) ? "but padded " : "")))
+              << "singularities"
               << " and " << (variant / 2 % 2 ? "arc-length deviation " : "feature distortion ") << "objective";
     meshProps.allocate<TOUCHED>(true);
     Reader reader(meshProps, inputFile, forceSanitization);
@@ -309,8 +314,13 @@ int main(int argc, char** argv)
             {
                 StructurePreserver sep(meshProps);
                 QuadraticObjective coarsestObjective = builder.simplifiedDistortionObjective(0.001, 0.01);
-                ASSERT_SUCCESS("IQP Quantization",
-                               IQPQuantizer(meshProps, sep, coarsestObjective).quantize(lowerBound, 60));
+                ASSERT_SUCCESS("ISP Quantization",
+                               ISPQuantizer(meshProps, sep, coarsestObjective).quantize(lowerBound));
+#ifndef QGP3D_WITHOUT_IQP
+                if (iqpTimeLimit > 0)
+                    ASSERT_SUCCESS("IQP Quantization",
+                                   IQPQuantizer(meshProps, sep, coarsestObjective).quantize(lowerBound, 60));
+#endif
                 minimalHexes = sep.numHexesInQuantization();
                 meshProps.get<MC_MESH_PROPS>()->release<ARC_INT_LENGTH>();
             }
@@ -365,7 +375,12 @@ int main(int argc, char** argv)
             StructurePreserver sep(meshProps);
             ObjectiveBuilder builder(meshProps);
             QuadraticObjective obj = builder.arcLengthDeviationObjective(optimalScaling);
-            ASSERT_SUCCESS("Quantization block structured", IQPQuantizer(meshProps, sep, obj).quantize(1.0, 120));
+            ASSERT_SUCCESS("Re-quantization for block structured output",
+                           ISPQuantizer(meshProps, sep, obj).quantize(1.0));
+#ifndef QGP3D_WITHOUT_IQP
+            if (iqpTimeLimit > 0)
+                ASSERT_SUCCESS("Improving quantization", IQPQuantizer(meshProps, sep, obj).quantize(1.0, 120));
+#endif
         }
     }
     else if (!constraintFile.empty())
@@ -381,9 +396,11 @@ int main(int argc, char** argv)
         else if (ret == IGMGenerator::NO_CONVERGENCE)
             LOG(INFO) << "Generated IGM has some inversions";
         else
+        {
             LOG(ERROR) << "Generating IGM failed with error code " << ret;
+            return ret;
+        }
         std::string success = (ret == IGMGenerator::SUCCESS) ? "_clean" : "_dirty";
-
 #ifdef MC3D_WITH_VIEWER
         if (useViewer)
         {
